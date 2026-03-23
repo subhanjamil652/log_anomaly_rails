@@ -1,0 +1,14 @@
+.DS_Store
+.idea/
+
+# Dissertation sources (keep repo focused on runnable code)
+*.docx
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Rails / Node (extra safety at repo root)
+log_anomaly_rails/node_modules/
