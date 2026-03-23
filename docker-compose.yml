@@ -1,0 +1,41 @@
+version: "3.9"
+
+services:
+  # Python Flask ML API
+  ml_api:
+    build:
+      context: ./ml_pipeline
+      dockerfile: Dockerfile
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./ml_pipeline:/app
+    environment:
+      - FLASK_ENV=production
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Rails Web Application
+  rails_app:
+    build:
+      context: ./log_anomaly_rails
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - RAILS_ENV=production
+      - ML_API_URL=http://ml_api:5001
+      - RAILS_MASTER_KEY=${RAILS_MASTER_KEY}
+      - SECRET_KEY_BASE=${SECRET_KEY_BASE}
+    depends_on:
+      ml_api:
+        condition: service_healthy
+    volumes:
+      - rails_storage:/rails/storage
+
+volumes:
+  rails_storage:
