@@ -1,0 +1,150 @@
+<% content_for :page_title, "Live Monitor" %>
+
+<div class="row g-3">
+  <!-- Controls -->
+  <div class="col-lg-3">
+    <div class="card-dark mb-3">
+      <h6 class="fw-semibold mb-3"><i class="bi bi-sliders me-2" style="color:#3b82f6;"></i>Simulation Settings</h6>
+      <div class="mb-3">
+        <label class="form-label" style="font-size:0.78rem;color:var(--text-secondary);">Log Count</label>
+        <input type="range" id="nLogs" min="20" max="200" value="60" class="form-range">
+        <div style="font-size:0.78rem;color:var(--text-primary);text-align:right;"><span id="nLogsVal">60</span> logs</div>
+      </div>
+      <div class="mb-3">
+        <label class="form-label" style="font-size:0.78rem;color:var(--text-secondary);">Anomaly Rate</label>
+        <input type="range" id="anomalyRate" min="1" max="30" value="8" class="form-range">
+        <div style="font-size:0.78rem;color:var(--text-primary);text-align:right;"><span id="anomalyRateVal">8</span>%</div>
+      </div>
+      <button id="startBtn" class="btn btn-primary-custom w-100 mb-2">
+        <i class="bi bi-play-fill me-1"></i>Start Simulation
+      </button>
+      <button id="stopBtn" class="btn w-100" style="border:1px solid #ef4444;color:#fca5a5;display:none;">
+        <i class="bi bi-stop-fill me-1"></i>Stop
+      </button>
+    </div>
+
+    <!-- Live counters -->
+    <div class="card-dark">
+      <h6 class="fw-semibold mb-3"><i class="bi bi-activity me-2" style="color:#22c55e;"></i>Live Counters</h6>
+      <div class="mb-2">
+        <div class="d-flex justify-content-between mb-1">
+          <span style="font-size:0.78rem;color:var(--text-secondary);">Processed</span>
+          <span id="cntTotal" style="font-size:0.85rem;font-weight:600;color:#3b82f6;">0</span>
+        </div>
+        <div class="progress" style="height:4px;background:#334155;">
+          <div id="progressBar" class="progress-bar" style="width:0%;background:#3b82f6;transition:width 0.3s;"></div>
+        </div>
+      </div>
+      <div class="d-flex justify-content-between mb-1">
+        <span style="font-size:0.78rem;color:var(--text-secondary);">Anomalies</span>
+        <span id="cntAnom" class="anomaly-pulse" style="font-size:0.85rem;font-weight:600;color:#ef4444;">0</span>
+      </div>
+      <div class="d-flex justify-content-between mb-1">
+        <span style="font-size:0.78rem;color:var(--text-secondary);">Normal</span>
+        <span id="cntNorm" style="font-size:0.85rem;font-weight:600;color:#22c55e;">0</span>
+      </div>
+      <div class="d-flex justify-content-between">
+        <span style="font-size:0.78rem;color:var(--text-secondary);">Anomaly Rate</span>
+        <span id="liveRate" style="font-size:0.85rem;font-weight:600;color:#f59e0b;">0%</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Terminal -->
+  <div class="col-lg-9">
+    <div class="card-dark" style="padding:0;overflow:hidden;">
+      <div class="d-flex align-items-center justify-content-between px-3 py-2" style="border-bottom:1px solid var(--border-color);">
+        <div class="d-flex align-items-center gap-2">
+          <div style="width:12px;height:12px;border-radius:50%;background:#ef4444;"></div>
+          <div style="width:12px;height:12px;border-radius:50%;background:#f59e0b;"></div>
+          <div style="width:12px;height:12px;border-radius:50%;background:#22c55e;"></div>
+          <span style="font-size:0.78rem;color:var(--text-secondary);margin-left:0.5rem;">bgl_anomaly_detector - live stream</span>
+        </div>
+        <div id="statusDot" style="width:8px;height:8px;border-radius:50%;background:#334155;"></div>
+      </div>
+      <div id="logTerminal" class="log-terminal" style="height:520px;border-radius:0;border:none;">
+        <div style="color:#475569;font-style:italic;">Press "Start Simulation" to begin real-time log analysis ...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let evtSource = null;
+let total = 0, anomalies = 0, nTarget = 60;
+
+document.getElementById('nLogs').addEventListener('input', function() {
+  document.getElementById('nLogsVal').textContent = this.value;
+  nTarget = parseInt(this.value);
+});
+document.getElementById('anomalyRate').addEventListener('input', function() {
+  document.getElementById('anomalyRateVal').textContent = this.value;
+});
+
+document.getElementById('startBtn').addEventListener('click', startSim);
+document.getElementById('stopBtn').addEventListener('click', stopSim);
+
+function startSim() {
+  if (evtSource) evtSource.close();
+  total = 0; anomalies = 0;
+  const terminal = document.getElementById('logTerminal');
+  terminal.innerHTML = '';
+  document.getElementById('cntTotal').textContent = 0;
+  document.getElementById('cntAnom').textContent  = 0;
+  document.getElementById('cntNorm').textContent  = 0;
+  document.getElementById('liveRate').textContent = '0%';
+  document.getElementById('progressBar').style.width = '0%';
+  document.getElementById('startBtn').style.display = 'none';
+  document.getElementById('stopBtn').style.display  = '';
+  document.getElementById('statusDot').style.background = '#22c55e';
+  document.getElementById('statusDot').style.boxShadow = '0 0 6px #22c55e';
+
+  const nLogs = document.getElementById('nLogs').value;
+  const rate  = document.getElementById('anomalyRate').value / 100;
+  evtSource = new EventSource(`/monitor/stream?n_logs=${nLogs}&anomaly_rate=${rate}`);
+
+  evtSource.onmessage = function(e) {
+    const d = JSON.parse(e.data);
+    total++;
+    if (d.is_anomaly) anomalies++;
+    const normal = total - anomalies;
+    document.getElementById('cntTotal').textContent = total;
+    document.getElementById('cntAnom').textContent  = anomalies;
+    document.getElementById('cntNorm').textContent  = normal;
+    document.getElementById('liveRate').textContent = `${(anomalies/total*100).toFixed(1)}%`;
+    document.getElementById('progressBar').style.width = `${d.progress}%`;
+
+    const line = document.createElement('div');
+    const ts   = new Date().toISOString().split('T')[1].split('.')[0];
+    const scoreStr = d.anomaly_score !== undefined ? ` [score=${d.anomaly_score.toFixed(3)}]` : '';
+    line.className = d.is_anomaly ? 'log-anomaly' : (d.level === 'WARNING' ? 'log-warning' : 'log-normal');
+    line.innerHTML = `<span style="color:#475569;user-select:none;">[${ts}] </span>${escapeHtml(d.line)}${scoreStr}`;
+    terminal.appendChild(line);
+    terminal.scrollTop = terminal.scrollHeight;
+  };
+
+  evtSource.addEventListener('complete', function(e) {
+    const s = JSON.parse(e.data);
+    const sumLine = document.createElement('div');
+    sumLine.style.cssText = 'color:#3b82f6;margin-top:0.5rem;border-top:1px solid #334155;padding-top:0.5rem;';
+    sumLine.textContent = `-- Simulation complete: ${s.total} logs processed, ${s.anomalies} anomalies detected (${(s.anomalies/s.total*100).toFixed(1)}%) --`;
+    terminal.appendChild(sumLine);
+    terminal.scrollTop = terminal.scrollHeight;
+    stopSim();
+  });
+
+  evtSource.onerror = function() { stopSim(); };
+}
+
+function stopSim() {
+  if (evtSource) { evtSource.close(); evtSource = null; }
+  document.getElementById('startBtn').style.display = '';
+  document.getElementById('stopBtn').style.display  = 'none';
+  document.getElementById('statusDot').style.background  = '#334155';
+  document.getElementById('statusDot').style.boxShadow = 'none';
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>

@@ -1,0 +1,111 @@
+<% content_for :page_title, "Alert Details" %>
+<% content_for :breadcrumb do %>
+  <li class="breadcrumb-item"><%= link_to "Alerts", alerts_path, style: "color:#3b82f6;text-decoration:none;" %></li>
+  <li class="breadcrumb-item active">Alert #<%= @alert.id %></li>
+<% end %>
+
+<div class="row g-3">
+  <div class="col-lg-7">
+    <div class="card-dark severity-<%= @alert.severity || 'low' %> mb-3">
+      <div class="d-flex justify-content-between align-items-start mb-3">
+        <div>
+          <span class="badge badge-<%= @alert.severity %> rounded-pill px-2 me-2"><%= @alert.severity&.upcase %></span>
+          <span class="badge rounded-pill" style="background:rgba(255,255,255,0.06);color:var(--text-secondary);">
+            <%= @alert.alert_model_name || "Random Forest" %>
+          </span>
+        </div>
+        <span class="badge rounded-pill" style="background:rgba(59,130,246,0.15);color:#93c5fd;">
+          <%= (@alert.status || "new").capitalize %>
+        </span>
+      </div>
+      <div class="row g-3 mb-3">
+        <div class="col-4 text-center">
+          <div style="font-size:1.8rem;font-weight:700;color:#ef4444;"><%= @alert.anomaly_score.to_f.round(3) %></div>
+          <div style="font-size:0.72rem;color:var(--text-secondary);">Anomaly Score</div>
+        </div>
+        <div class="col-4 text-center">
+          <div style="font-size:1.8rem;font-weight:700;color:#3b82f6;"><%= (@alert.confidence_score.to_f * 100).round(1) %>%</div>
+          <div style="font-size:0.72rem;color:var(--text-secondary);">Confidence</div>
+        </div>
+        <div class="col-4 text-center">
+          <div style="font-size:0.85rem;font-weight:600;color:#f59e0b;"><%= @alert.detected_at&.strftime("%d %b %Y") %></div>
+          <div style="font-size:0.72rem;color:var(--text-secondary);"><%= @alert.detected_at&.strftime("%H:%M:%S") %></div>
+        </div>
+      </div>
+      <h6 style="font-size:0.78rem;color:var(--text-secondary);margin-bottom:0.5rem;">Log Sequence</h6>
+      <div class="log-terminal" style="height:auto;max-height:180px;font-size:0.72rem;">
+        <%= @alert.log_sequence || "No log sequence available." %>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="card-dark">
+      <h6 class="fw-semibold mb-3">Actions</h6>
+      <div class="d-flex gap-2">
+        <% if @alert.status != 'reviewed' %>
+          <%= button_to review_alert_path(@alert), method: :patch, class: "btn btn-sm", style: "border:1px solid #f59e0b;color:#fde68a;" do %>
+            <i class="bi bi-check me-1"></i>Mark Reviewed
+          <% end %>
+        <% end %>
+        <% if @alert.status != 'resolved' %>
+          <%= button_to resolve_alert_path(@alert), method: :patch, class: "btn btn-sm", style: "border:1px solid #22c55e;color:#86efac;" do %>
+            <i class="bi bi-check2-all me-1"></i>Resolve
+          <% end %>
+        <% end %>
+        <%= button_to alert_path(@alert), method: :delete,
+            data: { turbo_confirm: "Delete this alert?" },
+            class: "btn btn-sm", style: "border:1px solid #ef4444;color:#fca5a5;" do %>
+          <i class="bi bi-trash me-1"></i>Delete
+        <% end %>
+        <%= link_to alerts_path, class: "btn btn-sm ms-auto", style: "border:1px solid var(--border-color);color:var(--text-secondary);" do %>
+          <i class="bi bi-arrow-left me-1"></i>Back
+        <% end %>
+      </div>
+    </div>
+  </div>
+
+  <!-- SHAP Chart -->
+  <div class="col-lg-5">
+    <div class="card-dark">
+      <h6 class="fw-semibold mb-3"><i class="bi bi-bar-chart-steps me-2" style="color:#a855f7;"></i>SHAP Feature Importances</h6>
+      <% if @feature_importances.any? %>
+        <canvas id="shapChart" height="300"></canvas>
+        <p style="font-size:0.72rem;color:var(--text-secondary);margin-top:1rem;">
+          Red bars indicate features that <strong>increased</strong> the anomaly score.
+          Green bars indicate features that <strong>decreased</strong> it.
+        </p>
+      <% else %>
+        <div class="text-center py-4" style="color:var(--text-secondary);">
+          <i class="bi bi-bar-chart mb-2" style="font-size:2rem;display:block;"></i>
+          No SHAP data available for this alert.
+        </div>
+      <% end %>
+    </div>
+  </div>
+</div>
+
+<% if @feature_importances.any? %>
+<script>
+const fi = <%= raw @feature_importances.to_json %>;
+new Chart(document.getElementById('shapChart'), {
+  type: 'bar',
+  data: {
+    labels: fi.map(f => f.name ? f.name.replace(/_/g,' ') : f['name'] ? f['name'].replace(/_/g,' ') : ''),
+    datasets: [{
+      label: 'SHAP value',
+      data: fi.map(f => Math.abs(f.value || f['value'] || 0)),
+      backgroundColor: fi.map(f => (f.direction || f['direction']) === 'positive' ? '#ef4444' : '#22c55e'),
+      borderRadius: 4,
+    }]
+  },
+  options: {
+    indexAxis: 'y', responsive: true,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: 'rgba(255,255,255,0.04)' } },
+      y: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { display: false } }
+    }
+  }
+});
+</script>
+<% end %>

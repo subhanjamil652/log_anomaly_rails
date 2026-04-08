@@ -1,0 +1,177 @@
+<% content_for :page_title, "Model Performance" %>
+
+<!-- Best model highlight -->
+<% if @best %>
+<div class="card-dark mb-4" style="border-color:#3b82f6;background:rgba(59,130,246,0.06);">
+  <div class="d-flex align-items-center gap-3">
+    <i class="bi bi-trophy-fill" style="font-size:2rem;color:#f59e0b;"></i>
+    <div>
+      <div style="font-size:0.75rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.08em;">Best Performing Model</div>
+      <div style="font-size:1.2rem;font-weight:700;color:var(--text-primary);"><%= @best["name"] %></div>
+      <div style="font-size:0.8rem;color:var(--text-secondary);">
+        F1: <strong style="color:#22c55e;"><%= @best["f1_score"] %></strong> &nbsp;|&nbsp;
+        Precision: <strong style="color:#3b82f6;"><%= @best["precision"] %></strong> &nbsp;|&nbsp;
+        Recall: <strong style="color:#a855f7;"><%= @best["recall"] %></strong> &nbsp;|&nbsp;
+        AUC-ROC: <strong style="color:#f59e0b;"><%= @best["auc_roc"] %></strong>
+      </div>
+    </div>
+    <% if @trained_at %>
+      <div class="ms-auto text-end">
+        <div style="font-size:0.72rem;color:var(--text-secondary);">Trained</div>
+        <div style="font-size:0.8rem;color:var(--text-primary);"><%= @trained_at.to_s[0,16].tr('T',' ') %></div>
+        <div style="font-size:0.72rem;color:var(--text-secondary);">Dataset: BGL LogHub</div>
+      </div>
+    <% end %>
+  </div>
+</div>
+<% end %>
+
+<!-- Model metrics table -->
+<div class="card-dark mb-4">
+  <h6 class="fw-semibold mb-3"><i class="bi bi-table me-2" style="color:#3b82f6;"></i>All Model Metrics</h6>
+  <div style="overflow-x:auto;">
+    <table class="table table-dark-custom mb-0">
+      <thead>
+        <tr>
+          <th>Model</th><th>Type</th><th>F1</th><th>Precision</th><th>Recall</th>
+          <th>AUC-ROC</th><th>Accuracy</th><th>FPR</th><th>Latency</th><th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% @models.each do |m| %>
+          <tr class="<%= m['is_active'] ? '' : '' %>">
+            <td>
+              <span class="fw-semibold" style="color:var(--text-primary);">
+                <% if m['name'] == @best&.dig('name') %><i class="bi bi-star-fill me-1" style="color:#f59e0b;"></i><% end %>
+                <%= m['name'] %>
+              </span>
+            </td>
+            <td><span class="badge rounded-pill" style="background:rgba(255,255,255,0.06);color:var(--text-secondary);font-size:0.7rem;"><%= m['type'] %></span></td>
+            <td><strong style="color:<%= m['f1_score'].to_f >= 0.90 ? '#22c55e' : m['f1_score'].to_f >= 0.80 ? '#f59e0b' : '#ef4444' %>;"><%= m['f1_score'] %></strong></td>
+            <td><%= m['precision'] %></td>
+            <td><%= m['recall'] %></td>
+            <td><%= m['auc_roc'] %></td>
+            <td><%= m['accuracy'] %></td>
+            <td><span style="color:<%= m['false_positive_rate'].to_f < 0.05 ? '#22c55e' : '#f59e0b' %>;"><%= m['false_positive_rate'] %></span></td>
+            <td><%= m['detection_latency_ms'] %>ms</td>
+            <td>
+              <% if m['is_active'] %>
+                <span class="badge rounded-pill" style="background:rgba(34,197,94,0.15);color:#86efac;font-size:0.7rem;">Active</span>
+              <% else %>
+                <span class="badge rounded-pill" style="background:rgba(255,255,255,0.06);color:var(--text-secondary);font-size:0.7rem;">Trained</span>
+              <% end %>
+            </td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Charts row -->
+<div class="row g-3 mb-4">
+  <div class="col-md-6">
+    <div class="card-dark">
+      <h6 class="fw-semibold mb-3"><i class="bi bi-hexagon me-2" style="color:#a855f7;"></i>Radar — Model Comparison</h6>
+      <canvas id="radarChart" height="260"></canvas>
+    </div>
+  </div>
+  <div class="col-md-6">
+    <div class="card-dark">
+      <h6 class="fw-semibold mb-3"><i class="bi bi-graph-up me-2" style="color:#22c55e;"></i>ROC Curves</h6>
+      <canvas id="rocChart" height="260"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- Dataset Info -->
+<div class="card-dark">
+  <h6 class="fw-semibold mb-3"><i class="bi bi-database me-2" style="color:#06b6d4;"></i>Dataset Information — BGL (Blue Gene/L)</h6>
+  <div class="row g-3">
+    <% info = @dataset_info %>
+    <div class="col-md-4">
+      <% [["Dataset", info[:name]], ["Source", info[:source]], ["Window Size", "#{info[:window_size]} events"],
+          ["Stride", "#{info[:stride]} events"]].each do |k, v| %>
+        <div class="d-flex justify-content-between py-1" style="border-bottom:1px solid var(--border-color);">
+          <span style="font-size:0.78rem;color:var(--text-secondary);"><%= k %></span>
+          <span style="font-size:0.78rem;color:var(--text-primary);"><%= v %></span>
+        </div>
+      <% end %>
+    </div>
+    <div class="col-md-4">
+      <% [["Total Messages", number_with_delimiter(info[:total])],
+          ["Anomaly Messages", number_with_delimiter(info[:anomalies])],
+          ["Normal Messages", number_with_delimiter(info[:normal])],
+          ["Class Imbalance", info[:imbalance_ratio]]].each do |k, v| %>
+        <div class="d-flex justify-content-between py-1" style="border-bottom:1px solid var(--border-color);">
+          <span style="font-size:0.78rem;color:var(--text-secondary);"><%= k %></span>
+          <span style="font-size:0.78rem;color:var(--text-primary);"><%= v %></span>
+        </div>
+      <% end %>
+    </div>
+    <div class="col-md-4">
+      <% [["Log Parser", "Drain Algorithm (He et al. 2016)"],
+          ["Imbalance Handling", "SMOTE Oversampling"],
+          ["Explainability", "SHAP (Lundberg & Lee 2017)"],
+          ["Evaluation", "Stratified 70/15/15 Split"]].each do |k, v| %>
+        <div class="d-flex justify-content-between py-1" style="border-bottom:1px solid var(--border-color);">
+          <span style="font-size:0.78rem;color:var(--text-secondary);"><%= k %></span>
+          <span style="font-size:0.78rem;color:var(--text-primary);"><%= v %></span>
+        </div>
+      <% end %>
+    </div>
+  </div>
+</div>
+
+<script>
+const models = <%= raw @models.to_json %>;
+const ROC    = <%= raw @roc_data.to_json %>;
+const COLORS = ['#3b82f6','#22c55e','#f59e0b','#a855f7'];
+
+// Radar
+new Chart(document.getElementById('radarChart'), {
+  type: 'radar',
+  data: {
+    labels: ['F1-Score','Precision','Recall','AUC-ROC','Accuracy'],
+    datasets: models.map((m, i) => ({
+      label: m.name,
+      data: [m.f1_score, m.precision, m.recall, m.auc_roc, m.accuracy],
+      borderColor: COLORS[i], backgroundColor: COLORS[i] + '22',
+      pointBackgroundColor: COLORS[i], pointRadius: 3,
+    }))
+  },
+  options: {
+    responsive: true,
+    scales: { r: { min: 0.6, max: 1.0, ticks: { color: '#475569', backdropColor: 'transparent', font: { size: 9 } },
+                   grid: { color: 'rgba(255,255,255,0.08)' }, pointLabels: { color: '#94a3b8', font: { size: 10 } } } },
+    plugins: { legend: { labels: { color: '#94a3b8', font: { size: 10 } } } }
+  }
+});
+
+// ROC
+new Chart(document.getElementById('rocChart'), {
+  type: 'line',
+  data: {
+    labels: ROC[0]?.fpr || [],
+    datasets: [
+      ...ROC.map((r, i) => ({
+        label: `${r.name} (AUC=${r.auc})`,
+        data: r.tpr, borderColor: COLORS[i], backgroundColor: 'transparent',
+        tension: 0.3, pointRadius: 0, borderWidth: 2,
+      })),
+      { label: 'Random (AUC=0.5)', data: ROC[0]?.fpr.map(x => x), borderColor: '#334155',
+        backgroundColor: 'transparent', borderDash: [4,4], pointRadius: 0, borderWidth: 1 }
+    ]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { labels: { color: '#94a3b8', font: { size: 9 } } } },
+    scales: {
+      x: { title: { display: true, text: 'FPR', color: '#64748b', font: { size: 10 } },
+           ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: 'rgba(255,255,255,0.04)' } },
+      y: { title: { display: true, text: 'TPR', color: '#64748b', font: { size: 10 } },
+           ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: 'rgba(255,255,255,0.04)' } }
+    }
+  }
+});
+</script>

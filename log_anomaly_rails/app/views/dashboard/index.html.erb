@@ -1,0 +1,182 @@
+<% content_for :page_title, "Dashboard" %>
+
+<!-- Stat Cards Row -->
+<div class="row g-3 mb-4">
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:rgba(239,68,68,0.15);">
+        <i class="bi bi-exclamation-triangle-fill" style="color:#ef4444;"></i>
+      </div>
+      <div>
+        <div class="stat-value"><%= @today_alerts %></div>
+        <div class="stat-label">Anomalies Today</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:rgba(59,130,246,0.15);">
+        <i class="bi bi-graph-up" style="color:#3b82f6;"></i>
+      </div>
+      <div>
+        <div class="stat-value"><%= (@metrics["f1_score"].to_f * 100).round(1) %>%</div>
+        <div class="stat-label">F1-Score (Best Model)</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:rgba(34,197,94,0.15);">
+        <i class="bi bi-cpu" style="color:#22c55e;"></i>
+      </div>
+      <div>
+        <div class="stat-value" style="font-size:1.1rem;"><%= @active_model&.dig("name") || "Random Forest" %></div>
+        <div class="stat-label">Active Model</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:rgba(245,158,11,0.15);">
+        <i class="bi bi-shield-check" style="color:#f59e0b;"></i>
+      </div>
+      <div>
+        <div class="stat-value"><%= (@metrics["false_positive_rate"].to_f * 100).round(1) %>%</div>
+        <div class="stat-label">False Positive Rate</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Charts Row -->
+<div class="row g-3 mb-4">
+  <div class="col-md-8">
+    <div class="card-dark h-100">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h6 class="mb-0 fw-semibold"><i class="bi bi-activity me-2" style="color:#3b82f6;"></i>Anomaly Detections — Last 24 Hours</h6>
+      </div>
+      <canvas id="timelineChart" height="120"></canvas>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card-dark h-100">
+      <h6 class="mb-3 fw-semibold"><i class="bi bi-pie-chart-fill me-2" style="color:#a855f7;"></i>Alert Severity Distribution</h6>
+      <canvas id="severityChart" height="200"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- Model comparison + Recent Alerts -->
+<div class="row g-3 mb-4">
+  <div class="col-md-5">
+    <div class="card-dark">
+      <h6 class="mb-3 fw-semibold"><i class="bi bi-bar-chart-fill me-2" style="color:#22c55e;"></i>Model F1-Score Comparison</h6>
+      <canvas id="modelCompareChart" height="220"></canvas>
+    </div>
+  </div>
+  <div class="col-md-7">
+    <div class="card-dark">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h6 class="mb-0 fw-semibold"><i class="bi bi-bell-fill me-2" style="color:#ef4444;"></i>Recent Anomaly Alerts</h6>
+        <%= link_to "View All →", alerts_path, style: "font-size:0.78rem;color:#3b82f6;text-decoration:none;" %>
+      </div>
+      <% if @recent_alerts.any? %>
+        <table class="table table-dark-custom mb-0">
+          <thead><tr><th>Severity</th><th>Score</th><th>Model</th><th>Status</th><th>Time</th></tr></thead>
+          <tbody>
+            <% @recent_alerts.each do |alert| %>
+              <tr>
+                <td><span class="badge badge-<%= alert.severity || 'low' %> rounded-pill px-2 py-1"><%= (alert.severity || "low").capitalize %></span></td>
+                <td>
+                  <div class="d-flex align-items-center gap-2">
+                    <div class="progress" style="height:5px;background:#334155;width:50px;">
+                      <div class="progress-bar" style="width:<%= (alert.anomaly_score.to_f*100).round %>%;background:#ef4444;"></div>
+                    </div>
+                    <small><%= alert.anomaly_score.to_f.round(3) %></small>
+                  </div>
+                </td>
+                <td><small style="color:var(--text-secondary);"><%= alert.alert_model_name&.split&.first || "RF" %></small></td>
+                <td>
+                  <span class="badge rounded-pill" style="background:rgba(59,130,246,0.15);color:#93c5fd;font-size:0.7rem;">
+                    <%= (alert.status || "new").capitalize %>
+                  </span>
+                </td>
+                <td><small style="color:var(--text-secondary);"><%= alert.detected_at ? time_ago_in_words(alert.detected_at) + " ago" : "—" %></small></td>
+              </tr>
+            <% end %>
+          </tbody>
+        </table>
+      <% else %>
+        <div class="text-center py-5" style="color:var(--text-secondary);">
+          <i class="bi bi-check-circle-fill mb-2" style="font-size:2rem;color:#22c55e;display:block;"></i>
+          No alerts yet. <%= link_to "Analyse logs", analysis_path, style: "color:#3b82f6;" %> to get started.
+        </div>
+      <% end %>
+    </div>
+  </div>
+</div>
+
+<!-- System Overview -->
+<div class="card-dark">
+  <h6 class="mb-3 fw-semibold"><i class="bi bi-info-circle me-2" style="color:#3b82f6;"></i>System Overview — BGL Dataset</h6>
+  <div class="row text-center g-3">
+    <% stats = [["4,747,963","BGL Log Messages","#3b82f6"],["348,460","Labelled Anomalies","#ef4444"],
+                ["#{(@metrics['auc_roc'].to_f*100).round(1)}%","AUC-ROC Score","#22c55e"],
+                ["#{@metrics['detection_latency_ms']&.round(2) || 0.42}ms","Detection Latency","#f59e0b"],
+                ["Drain","Log Parser","#a855f7"],["SHAP","Explainability","#06b6d4"]] %>
+    <% stats.each do |val, label, color| %>
+      <div class="col">
+        <div style="font-size:1.4rem;font-weight:700;color:<%= color %>;"><%= val %></div>
+        <div style="font-size:0.75rem;color:var(--text-secondary);margin-top:0.2rem;"><%= label %></div>
+      </div>
+    <% end %>
+  </div>
+</div>
+
+<script>
+const models = <%= raw @models.to_json %>;
+
+new Chart(document.getElementById('timelineChart'), {
+  type: 'line',
+  data: {
+    labels: <%= raw @hourly_labels.to_json %>,
+    datasets: [{
+      label: 'Anomalies', data: <%= raw @hourly_counts.to_json %>,
+      borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.08)',
+      fill: true, tension: 0.4, pointRadius: 2,
+    }]
+  },
+  options: { responsive: true, plugins: { legend: { display: false } },
+    scales: { x: { ticks: { color: '#64748b', font: { size: 9 }, maxTicksLimit: 8 }, grid: { color: 'rgba(255,255,255,0.04)' } },
+               y: { ticks: { color: '#64748b' }, grid: { color: 'rgba(255,255,255,0.04)' } } } }
+});
+
+new Chart(document.getElementById('severityChart'), {
+  type: 'doughnut',
+  data: {
+    labels: ['Critical','High','Medium','Low'],
+    datasets: [{ data: [<%= @severity_counts['critical'] %>,<%= @severity_counts['high'] %>,<%= @severity_counts['medium'] %>,<%= @severity_counts['low'] %>],
+      backgroundColor: ['#ef4444','#f97316','#f59e0b','#22c55e'], borderWidth: 0 }]
+  },
+  options: { responsive: true, cutout: '65%',
+    plugins: { legend: { position: 'bottom', labels: { color: '#94a3b8', font: { size: 10 } } } } }
+});
+
+new Chart(document.getElementById('modelCompareChart'), {
+  type: 'bar',
+  data: {
+    labels: models.map(m => m.name.replace(' ', '\n')),
+    datasets: [
+      { label: 'F1',        data: models.map(m => m.f1_score),  backgroundColor: '#3b82f6' },
+      { label: 'Precision', data: models.map(m => m.precision), backgroundColor: '#22c55e' },
+      { label: 'Recall',    data: models.map(m => m.recall),    backgroundColor: '#a855f7' },
+    ]
+  },
+  options: {
+    responsive: true,
+    scales: { x: { ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: 'rgba(255,255,255,0.04)' } },
+               y: { min: 0.6, max: 1, ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.04)' } } },
+    plugins: { legend: { labels: { color: '#94a3b8', font: { size: 10 } } } }
+  }
+});
+</script>

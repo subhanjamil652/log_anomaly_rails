@@ -1,0 +1,125 @@
+<% content_for :page_title, "Analysis Results" %>
+<% content_for :breadcrumb do %>
+  <li class="breadcrumb-item"><%= link_to "Analysis", analysis_path, style: "color:#3b82f6;text-decoration:none;" %></li>
+  <li class="breadcrumb-item active">Results</li>
+<% end %>
+
+<!-- Summary Cards -->
+<div class="row g-3 mb-4">
+  <% n_normal = @lines.size - @n_anomaly rescue 0 %>
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:rgba(59,130,246,0.15);"><i class="bi bi-file-text" style="color:#3b82f6;"></i></div>
+      <div><div class="stat-value"><%= @lines.size %></div><div class="stat-label">Log Lines Analysed</div></div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:rgba(239,68,68,0.15);"><i class="bi bi-exclamation-triangle-fill" style="color:#ef4444;"></i></div>
+      <div><div class="stat-value" style="color:#ef4444;"><%= @n_anomaly %></div><div class="stat-label">Anomalies Detected</div></div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:rgba(34,197,94,0.15);"><i class="bi bi-check-circle-fill" style="color:#22c55e;"></i></div>
+      <div><div class="stat-value" style="color:#22c55e;"><%= n_normal %></div><div class="stat-label">Normal Windows</div></div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:rgba(245,158,11,0.15);"><i class="bi bi-speedometer2" style="color:#f59e0b;"></i></div>
+      <div>
+        <div class="stat-value"><%= @summary["anomaly_rate"] ? "#{(@summary['anomaly_rate'].to_f*100).round(1)}%" : "—" %></div>
+        <div class="stat-label">Anomaly Rate</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3">
+  <!-- Predictions Table -->
+  <div class="col-lg-7">
+    <div class="card-dark">
+      <h6 class="fw-semibold mb-3"><i class="bi bi-table me-2" style="color:#3b82f6;"></i>Window Predictions</h6>
+      <div style="max-height:400px;overflow-y:auto;">
+        <table class="table table-dark-custom mb-0">
+          <thead><tr><th>#</th><th>Status</th><th>Anomaly Score</th><th>Confidence</th></tr></thead>
+          <tbody>
+            <% @preds.each do |pred| %>
+              <tr class="<%= pred['is_anomaly'] ? 'severity-critical' : '' %>">
+                <td><small style="color:var(--text-secondary);">#<%= pred['window_index'].to_i + 1 %></small></td>
+                <td>
+                  <% if pred['is_anomaly'] %>
+                    <span class="badge badge-critical rounded-pill"><i class="bi bi-exclamation-circle me-1"></i>ANOMALY</span>
+                  <% else %>
+                    <span class="badge" style="background:rgba(34,197,94,0.15);color:#86efac;" class="rounded-pill">NORMAL</span>
+                  <% end %>
+                </td>
+                <td>
+                  <div class="d-flex align-items-center gap-2">
+                    <div class="progress" style="height:6px;background:#1e3a5f;width:80px;">
+                      <div class="progress-bar" style="width:<%= (pred['anomaly_score'].to_f*100).round %>%;background:<%= pred['is_anomaly'] ? '#ef4444' : '#22c55e' %>;"></div>
+                    </div>
+                    <small><%= pred['anomaly_score'].to_f.round(4) %></small>
+                  </div>
+                </td>
+                <td><small style="color:var(--text-secondary);"><%= (pred['confidence'].to_f * 100).round(1) %>%</small></td>
+              </tr>
+            <% end %>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- SHAP Explanations -->
+  <div class="col-lg-5">
+    <div class="card-dark mb-3">
+      <h6 class="fw-semibold mb-3"><i class="bi bi-bar-chart-steps me-2" style="color:#a855f7;"></i>SHAP Feature Importance</h6>
+      <canvas id="shapChart" height="260"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- Log Lines Display -->
+<div class="card-dark mt-3">
+  <h6 class="fw-semibold mb-3"><i class="bi bi-file-code me-2" style="color:#06b6d4;"></i>Log Lines (colour-coded)</h6>
+  <div class="log-terminal">
+    <% @lines.first(100).each_with_index do |line, i| %>
+      <% is_anom = @preds[i]&.dig("is_anomaly") %>
+      <div class="<%= is_anom ? 'log-anomaly' : line.include?('WARNING') ? 'log-warning' : 'log-normal' %>">
+        <span style="color:#475569;user-select:none;margin-right:0.5rem;"><%= "%04d" % (i+1) %></span><%= line %>
+      </div>
+    <% end %>
+  </div>
+</div>
+
+<div class="mt-3">
+  <%= link_to analysis_path, class: "btn", style: "border:1px solid var(--border-color);color:var(--text-secondary);" do %>
+    <i class="bi bi-arrow-left me-1"></i>Analyse Another
+  <% end %>
+</div>
+
+<% fi = @explain["feature_importances"] || [] %>
+<script>
+const fi = <%= raw fi.to_json %>;
+const labels = fi.map(f => f.name.replace(/_/g, ' '));
+const values = fi.map(f => Math.abs(f.value));
+const colors = fi.map(f => f.direction === 'positive' ? '#ef4444' : '#22c55e');
+
+new Chart(document.getElementById('shapChart'), {
+  type: 'bar',
+  data: {
+    labels: labels,
+    datasets: [{ label: 'SHAP |value|', data: values, backgroundColor: colors, borderRadius: 4 }]
+  },
+  options: {
+    indexAxis: 'y', responsive: true,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: 'rgba(255,255,255,0.04)' } },
+      y: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { display: false } }
+    }
+  }
+});
+</script>

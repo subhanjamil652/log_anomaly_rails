@@ -1,0 +1,122 @@
+<% content_for :page_title, "Log Analysis" %>
+
+<div class="row g-3">
+  <div class="col-lg-8">
+    <div class="card-dark">
+      <h5 class="fw-semibold mb-1"><i class="bi bi-search me-2" style="color:#3b82f6;"></i>Analyse Log Data</h5>
+      <p style="font-size:0.82rem;color:var(--text-secondary);margin-bottom:1.5rem;">
+        Paste BGL supercomputer log lines or upload a log file. The system parses each line using the
+        Drain algorithm, extracts sliding-window feature vectors, and runs anomaly detection using the trained Random Forest model.
+      </p>
+
+      <%= form_tag(analysis_path, method: :post, multipart: true, id: "analysis-form") do %>
+        <!-- Tabs -->
+        <ul class="nav nav-tabs mb-3" style="border-color:var(--border-color);">
+          <li class="nav-item">
+            <a class="nav-link active" id="paste-tab" href="#" onclick="switchTab('paste');return false;"
+               style="color:var(--text-secondary);border-color:transparent;background:none;">
+              <i class="bi bi-text-left me-1"></i>Paste Logs
+            </a>
+          </li>
+          <li class="nav-item">
+            <a class="nav-link" id="upload-tab" href="#" onclick="switchTab('upload');return false;"
+               style="color:var(--text-secondary);border-color:transparent;background:none;">
+              <i class="bi bi-cloud-upload me-1"></i>Upload File
+            </a>
+          </li>
+        </ul>
+
+        <div id="paste-section">
+          <textarea name="log_input" id="log_input" rows="14" class="form-control form-control-dark w-100 mb-3"
+            placeholder="Paste BGL log lines here — one line per entry.
+
+Example:
+- 1117838570 2005.06.03 15:02:50.548667 R06-M1-N04-J01 RAS KERNEL KERNEL ciod: failed to read message
+FATAL 1117906684 2005.06.04 10:51:24.913855 R23-M0-N09-C0-J01 RAS KERNEL KERNEL data bus error
+- 1117907000 2005.06.04 10:57:30.000000 R01-M0-N02-J00 RAS APP APP program loaded"></textarea>
+        </div>
+
+        <div id="upload-section" style="display:none;">
+          <div class="mb-3 p-4 text-center" style="border:2px dashed var(--border-color);border-radius:8px;">
+            <i class="bi bi-file-text mb-2" style="font-size:2rem;color:var(--text-secondary);display:block;"></i>
+            <label for="log_file" style="cursor:pointer;color:#3b82f6;">Choose a .log or .txt file</label>
+            <input type="file" name="log_file" id="log_file" accept=".log,.txt" class="d-none">
+            <p style="font-size:0.78rem;color:var(--text-secondary);margin-top:0.5rem;">Supports BGL log format (LogHub)</p>
+          </div>
+        </div>
+
+        <div class="row g-2 mb-3">
+          <div class="col-auto">
+            <label class="form-label" style="font-size:0.78rem;color:var(--text-secondary);">Window Size</label>
+            <select name="window_size" class="form-select form-select-dark" style="width:auto;">
+              <option value="10">10 events</option>
+              <option value="20" selected>20 events</option>
+              <option value="50">50 events</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="d-flex gap-2">
+          <button type="submit" class="btn btn-primary-custom" id="submit-btn">
+            <i class="bi bi-lightning-fill me-1"></i>Analyse Logs
+          </button>
+          <button type="button" class="btn" style="border:1px solid var(--border-color);color:var(--text-secondary);"
+                  onclick="loadSample()">
+            <i class="bi bi-file-earmark-text me-1"></i>Load Sample
+          </button>
+        </div>
+      <% end %>
+
+      <div id="loading" class="text-center py-4" style="display:none;">
+        <div class="spinner-border" style="color:#3b82f6;width:2rem;height:2rem;" role="status"></div>
+        <p class="mt-2" style="color:var(--text-secondary);font-size:0.85rem;">Parsing logs with Drain · Extracting features · Running Random Forest inference ...</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    <div class="card-dark mb-3">
+      <h6 class="fw-semibold mb-2"><i class="bi bi-info-circle me-2" style="color:#3b82f6;"></i>How It Works</h6>
+      <ol style="font-size:0.8rem;color:var(--text-secondary);padding-left:1.2rem;line-height:2;">
+        <li>Log lines are parsed with the <strong style="color:var(--text-primary);">Drain algorithm</strong></li>
+        <li>Structured into <strong style="color:var(--text-primary);">sliding windows</strong> of 20 events</li>
+        <li>Feature extraction: TF-IDF, severity stats, component encoding</li>
+        <li><strong style="color:var(--text-primary);">Random Forest</strong> classifies each window</li>
+        <li><strong style="color:var(--text-primary);">SHAP</strong> values explain each prediction</li>
+      </ol>
+    </div>
+
+    <div class="card-dark">
+      <h6 class="fw-semibold mb-2"><i class="bi bi-lightning me-2" style="color:#f59e0b;"></i>Model Performance</h6>
+      <% [["F1-Score","0.924","#22c55e"],["Precision","0.918","#3b82f6"],["Recall","0.931","#a855f7"],["AUC-ROC","0.971","#f59e0b"]].each do |metric, val, color| %>
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <span style="font-size:0.8rem;color:var(--text-secondary);"><%= metric %></span>
+          <span style="font-size:0.85rem;font-weight:600;color:<%= color %>;"><%= val %></span>
+        </div>
+      <% end %>
+    </div>
+  </div>
+</div>
+
+<script>
+function switchTab(tab) {
+  document.getElementById('paste-section').style.display = tab === 'paste' ? '' : 'none';
+  document.getElementById('upload-section').style.display = tab === 'upload' ? '' : 'none';
+  document.getElementById('paste-tab').classList.toggle('active', tab === 'paste');
+  document.getElementById('upload-tab').classList.toggle('active', tab === 'upload');
+}
+
+document.getElementById('analysis-form').addEventListener('submit', function() {
+  document.getElementById('submit-btn').disabled = true;
+  document.getElementById('loading').style.display = '';
+});
+
+function loadSample() {
+  document.getElementById('log_input').value = `<%= @sample_logs.join('\n') %>`;
+}
+
+document.getElementById('log_file').addEventListener('change', function(e) {
+  const label = this.previousElementSibling;
+  if (this.files[0]) label.textContent = this.files[0].name;
+});
+</script>

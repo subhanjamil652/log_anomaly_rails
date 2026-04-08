@@ -1,0 +1,107 @@
+<% content_for :page_title, "Anomaly Alerts" %>
+
+<!-- Stats row -->
+<div class="row g-3 mb-4">
+  <% [[@total_count,"Total Alerts","#3b82f6","bell-fill"],[@critical_count,"Critical","#ef4444","exclamation-octagon-fill"],[@new_count,"Unreviewed","#f59e0b","eye-slash-fill"]].each do |val, lbl, color, icon| %>
+    <div class="col-md-4">
+      <div class="stat-card">
+        <div class="stat-icon" style="background:<%= color %>22;"><i class="bi bi-<%= icon %>" style="color:<%= color %>;"></i></div>
+        <div><div class="stat-value"><%= val %></div><div class="stat-label"><%= lbl %></div></div>
+      </div>
+    </div>
+  <% end %>
+</div>
+
+<!-- Filters -->
+<div class="card-dark mb-3">
+  <%= form_tag(alerts_path, method: :get, class: "row g-2 align-items-end") do %>
+    <div class="col-auto">
+      <%= select_tag :severity, options_for_select([["All Severities",""],["Critical","critical"],["High","high"],["Medium","medium"],["Low","low"]], params[:severity]),
+          class: "form-select form-select-dark form-select-sm" %>
+    </div>
+    <div class="col-auto">
+      <%= select_tag :status, options_for_select([["All Statuses",""],["New","new"],["Reviewed","reviewed"],["Resolved","resolved"]], params[:status]),
+          class: "form-select form-select-dark form-select-sm" %>
+    </div>
+    <div class="col-auto">
+      <%= date_field_tag :date_from, params[:date_from], class: "form-control form-control-dark form-control-sm", placeholder: "From date" %>
+    </div>
+    <div class="col-auto">
+      <button type="submit" class="btn btn-sm btn-primary-custom">Filter</button>
+      <%= link_to "Clear", alerts_path, class: "btn btn-sm", style: "border:1px solid var(--border-color);color:var(--text-secondary);margin-left:4px;" %>
+    </div>
+  <% end %>
+</div>
+
+<!-- Alert cards -->
+<% if @alerts.any? %>
+  <div class="row g-3">
+    <% @alerts.each do |alert| %>
+      <div class="col-12">
+        <div class="card-dark severity-<%= alert.severity || 'low' %>" style="transition: border 0.15s;">
+          <div class="row align-items-center">
+            <div class="col-md-1 text-center">
+              <% icon_map = { 'critical' => 'exclamation-octagon-fill', 'high' => 'exclamation-triangle-fill', 'medium' => 'exclamation-circle', 'low' => 'info-circle' } %>
+              <% color_map = { 'critical' => '#ef4444', 'high' => '#f97316', 'medium' => '#f59e0b', 'low' => '#22c55e' } %>
+              <i class="bi bi-<%= icon_map[alert.severity] || 'info-circle' %>" style="font-size:1.5rem;color:<%= color_map[alert.severity] || '#22c55e' %>;"></i>
+            </div>
+            <div class="col-md-5">
+              <div class="d-flex align-items-center gap-2 mb-1">
+                <span class="badge badge-<%= alert.severity || 'low' %> rounded-pill px-2"><%= (alert.severity || "low").upcase %></span>
+                <span class="badge rounded-pill" style="background:rgba(255,255,255,0.06);color:var(--text-secondary);font-size:0.7rem;">
+                  <%= alert.alert_model_name || "Random Forest" %>
+                </span>
+                <span class="badge rounded-pill" style="background:<%= alert.status == 'new' ? 'rgba(59,130,246,0.15)' : alert.status == 'resolved' ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)' %>; color:<%= alert.status == 'new' ? '#93c5fd' : alert.status == 'resolved' ? '#86efac' : '#fde68a' %>; font-size:0.7rem;">
+                  <%= (alert.status || "new").capitalize %>
+                </span>
+              </div>
+              <div style="font-size:0.78rem;color:var(--text-secondary);font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:400px;">
+                <%= alert.log_sequence&.truncate(100) || "Log sequence" %>
+              </div>
+            </div>
+            <div class="col-md-3">
+              <div class="d-flex align-items-center gap-2 mb-1">
+                <span style="font-size:0.75rem;color:var(--text-secondary);">Anomaly Score</span>
+                <span style="font-size:0.85rem;font-weight:600;color:#ef4444;"><%= alert.anomaly_score.to_f.round(4) %></span>
+              </div>
+              <div class="progress" style="height:5px;background:#334155;">
+                <div class="progress-bar" style="width:<%= (alert.anomaly_score.to_f*100).round %>%;background:<%= color_map[alert.severity] || '#22c55e' %>;"></div>
+              </div>
+              <div style="font-size:0.72rem;color:var(--text-secondary);margin-top:0.3rem;">
+                Confidence: <%= (alert.confidence_score.to_f * 100).round(1) %>%
+              </div>
+            </div>
+            <div class="col-md-2">
+              <div style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:0.5rem;">
+                <i class="bi bi-clock me-1"></i>
+                <%= alert.detected_at ? alert.detected_at.strftime("%d %b %H:%M") : "—" %>
+              </div>
+              <div class="d-flex gap-1 flex-wrap">
+                <%= link_to alert_path(alert), class: "btn btn-sm", style: "font-size:0.7rem;padding:2px 8px;border:1px solid #334155;color:#94a3b8;" do %>
+                  <i class="bi bi-eye"></i>
+                <% end %>
+                <% if alert.status != 'reviewed' %>
+                  <%= button_to review_alert_path(alert), method: :patch, class: "btn btn-sm", style: "font-size:0.7rem;padding:2px 8px;border:1px solid #334155;color:#fde68a;" do %>
+                    <i class="bi bi-check"></i>
+                  <% end %>
+                <% end %>
+                <% if alert.status != 'resolved' %>
+                  <%= button_to resolve_alert_path(alert), method: :patch, class: "btn btn-sm", style: "font-size:0.7rem;padding:2px 8px;border:1px solid #334155;color:#86efac;" do %>
+                    <i class="bi bi-check2-all"></i>
+                  <% end %>
+                <% end %>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    <% end %>
+  </div>
+<% else %>
+  <div class="card-dark text-center py-5">
+    <i class="bi bi-shield-check mb-3" style="font-size:3rem;color:#22c55e;display:block;"></i>
+    <h5 style="color:var(--text-primary);">No Anomaly Alerts</h5>
+    <p style="color:var(--text-secondary);">No alerts match your filter criteria.</p>
+    <%= link_to "Analyse Logs", analysis_path, class: "btn btn-primary-custom mt-2" %>
+  </div>
+<% end %>
