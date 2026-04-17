@@ -15,6 +15,16 @@ from sklearn.metrics import (
 logger = logging.getLogger(__name__)
 
 
+def _as_float(x) -> float:
+    """Coerce sklearn/numpy metric outputs to a plain Python float for round()."""
+    arr = np.asarray(x, dtype=float).ravel()
+    if arr.size == 0:
+        return 0.0
+    if arr.size != 1:
+        return float(arr[-1])
+    return float(arr[0])
+
+
 class ModelEvaluator:
     """Evaluate and compare all candidate anomaly detection models."""
 
@@ -23,22 +33,35 @@ class ModelEvaluator:
         name = model_name or getattr(model, "name", "Model")
         logger.info(f"Evaluating {name} ...")
 
+        y_test = np.asarray(y_test).ravel()
         # Latency measurement
         start = time.perf_counter()
-        y_pred = model.predict(X_test)
+        y_pred = np.asarray(model.predict(X_test)).ravel()
         latency_ms = (time.perf_counter() - start) / len(X_test) * 1000
 
         y_proba = None
+        y_score = None
         try:
             y_proba = model.predict_proba(X_test)
+            raw = np.asarray(y_proba, dtype=float)
+            if raw.ndim == 2 and raw.shape[1] >= 2:
+                y_score = raw[:, 1]
+            else:
+                y_score = raw.ravel()
         except Exception:
             pass
 
-        prec = precision_score(y_test, y_pred, zero_division=0)
-        rec  = recall_score(y_test, y_pred, zero_division=0)
-        f1   = f1_score(y_test, y_pred, zero_division=0)
-        acc  = accuracy_score(y_test, y_pred)
-        auc  = roc_auc_score(y_test, y_proba) if y_proba is not None else 0.5
+        prec = _as_float(precision_score(y_test, y_pred, zero_division=0))
+        rec = _as_float(recall_score(y_test, y_pred, zero_division=0))
+        f1 = _as_float(f1_score(y_test, y_pred, zero_division=0))
+        acc = _as_float(accuracy_score(y_test, y_pred))
+        if y_score is not None:
+            try:
+                auc = _as_float(roc_auc_score(y_test, y_score))
+            except ValueError:
+                auc = 0.5
+        else:
+            auc = 0.5
 
         cm = confusion_matrix(y_test, y_pred)
         tn, fp, fn, tp = cm.ravel() if cm.size == 4 else (0, 0, 0, 0)
@@ -46,8 +69,8 @@ class ModelEvaluator:
         fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0
 
         roc_data = None
-        if y_proba is not None:
-            fpr_arr, tpr_arr, _ = roc_curve(y_test, y_proba)
+        if y_score is not None:
+            fpr_arr, tpr_arr, _ = roc_curve(y_test, y_score)
             roc_data = {"fpr": fpr_arr.tolist(), "tpr": tpr_arr.tolist()}
 
         result = {
