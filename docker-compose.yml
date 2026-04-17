@@ -13,6 +13,8 @@ services:
     environment:
       - FLASK_ENV=production
       - PYTHONUNBUFFERED=1
+      - HF_TOKEN=${HF_TOKEN:-}
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5001/api/v1/health"]
       interval: 30s
