@@ -24,6 +24,7 @@ import numpy as np
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+import requests
 
 # -- Path setup ----------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -47,9 +48,65 @@ _feature_engineer = None
 _shap_explainer = None
 _drain_parser = None
 _metadata: dict = {}
+# Populated by _evaluate_saved_models_on_holdout(): model display name -> evaluator result dict
+_holdout_metrics: dict = {}
+
+# Order matches training artifacts; used for consistent /models ordering
+_MODEL_PKL_ORDER = [
+    ("logistic_regression.pkl", "Logistic Regression"),
+    ("random_forest.pkl", "Random Forest"),
+    ("isolation_forest.pkl", "Isolation Forest"),
+    ("lstm_autoencoder.pkl", "LSTM Autoencoder"),
+]
 
 
 # -- Model loading -------------------------------------------------------------
+
+def _evaluate_saved_models_on_holdout():
+    """
+    Load eval_holdout.npz (saved during training) and score every checkpoint.
+    This is the source of truth for /metrics and /models — not stale JSON.
+    """
+    global _holdout_metrics
+    _holdout_metrics = {}
+    holdout_path = os.path.join(MODELS_DIR, "eval_holdout.npz")
+    if not os.path.exists(holdout_path):
+        logger.warning(
+            "eval_holdout.npz missing — run training once "
+            "(python scripts/train_pipeline.py) to enable live holdout metrics."
+        )
+        return
+
+    import joblib
+    from src.evaluator import ModelEvaluator
+
+    z = np.load(holdout_path)
+    X_test, y_test = z["X_test"], z["y_test"]
+    ev = ModelEvaluator()
+
+    for fname, _label in _MODEL_PKL_ORDER:
+        path = os.path.join(MODELS_DIR, fname)
+        if not os.path.exists(path):
+            continue
+        try:
+            if fname == "lstm_autoencoder.pkl":
+                from src.models.lstm_autoencoder import LSTMAutoencoder
+
+                model = LSTMAutoencoder.load(path)
+            else:
+                model = joblib.load(path)
+            display_name = getattr(model, "name", _label)
+            res = ev.evaluate(model, X_test, y_test, display_name)
+            _holdout_metrics[display_name] = res
+            logger.info(
+                "Holdout eval — %s: F1=%.4f  AUC=%.4f",
+                display_name,
+                res["f1_score"],
+                res["auc_roc"],
+            )
+        except Exception as e:
+            logger.warning("Holdout eval failed for %s: %s", fname, e)
+
 
 def load_models():
     global _active_model, _feature_engineer, _shap_explainer
@@ -96,6 +153,8 @@ def load_models():
     if os.path.exists(shap_path):
         _shap_explainer = joblib.load(shap_path)
         logger.info("SHAP explainer loaded.")
+
+    _evaluate_saved_models_on_holdout()
 
 
 def _run_training():
@@ -151,6 +210,70 @@ def _predict_windows(log_lines: list) -> list:
         return _mock_predictions(log_lines)
 
 
+def _hf_zero_shot_semantics(log_lines: list) -> dict:
+    """
+    Optional Hugging Face Inference API (zero-shot NLI) over pasted log text.
+    Uses HF_TOKEN or HUGGING_FACE_HUB_TOKEN from the environment (e.g. from ~/.zshrc).
+    """
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    if not token:
+        return {
+            "error": "HF_TOKEN or HUGGING_FACE_HUB_TOKEN not set in environment.",
+        }
+
+    model_id = os.environ.get(
+        "HF_INFERENCE_MODEL",
+        "facebook/bart-large-mnli",
+    )
+    url = f"https://api-inference.huggingface.co/models/{model_id}"
+
+    text = "\n".join(log_lines[:120])[:4000].strip()
+    if not text:
+        return {"error": "No log text to classify."}
+
+    payload = {
+        "inputs": text,
+        "parameters": {
+            "candidate_labels": [
+                "normal routine informational supercomputer log",
+                "error fatal severe failure hardware memory bus anomaly",
+            ],
+        },
+    }
+    try:
+        r = requests.post(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            json=payload,
+            timeout=90,
+        )
+        if r.status_code != 200:
+            logger.warning("HF inference HTTP %s: %s", r.status_code, r.text[:400])
+            return {
+                "model": model_id,
+                "error": f"HTTP {r.status_code}",
+                "detail": r.text[:300],
+            }
+        data = r.json()
+        if isinstance(data, list) and data:
+            data = data[0]
+        labels = data.get("labels", [])
+        scores = data.get("scores", [])
+        sem_anomaly = float(scores[1]) if len(scores) > 1 else 0.0
+        sem_normal = float(scores[0]) if scores else 0.0
+        return {
+            "model": model_id,
+            "labels": labels,
+            "scores": scores,
+            "semantic_anomaly_score": round(sem_anomaly, 4),
+            "semantic_normal_score": round(sem_normal, 4),
+            "likely_anomaly_semantics": bool(sem_anomaly > sem_normal),
+        }
+    except Exception as e:
+        logger.warning("HF inference failed: %s", e)
+        return {"model": model_id, "error": str(e)}
+
+
 def _mock_predictions(log_lines: list) -> list:
     """Return realistic mock predictions for demo purposes."""
     rng = random.Random(42)
@@ -181,8 +304,46 @@ def health():
     })
 
 
+def _result_row_from_eval(res: dict, is_active: bool) -> dict:
+    return {
+        "name": res["model_name"],
+        "type": res.get("model_type", "unknown"),
+        "f1_score": res["f1_score"],
+        "precision": res["precision"],
+        "recall": res["recall"],
+        "auc_roc": res["auc_roc"],
+        "accuracy": res["accuracy"],
+        "false_positive_rate": res["false_positive_rate"],
+        "detection_latency_ms": res["detection_latency_ms"],
+        "is_active": is_active,
+        "metrics_source": "holdout_eval",
+    }
+
+
 @app.route("/api/v1/models", methods=["GET"])
 def list_models():
+    # Prefer live holdout metrics (same stratified test set for every checkpoint)
+    if _holdout_metrics:
+        models = []
+        for _fname, canonical in _MODEL_PKL_ORDER:
+            res = _holdout_metrics.get(canonical)
+            if res is None:
+                for _k, r in _holdout_metrics.items():
+                    if r.get("model_name") == canonical:
+                        res = r
+                        break
+            if res is None:
+                continue
+            models.append(_result_row_from_eval(
+                res, is_active=(canonical == _active_model_name)))
+
+        return jsonify({
+            "models": models,
+            "active_model": _active_model_name,
+            "trained_at": _metadata.get("trained_at", ""),
+            "metrics_source": "holdout_eval",
+        })
+
     model_info = _metadata.get("models", {})
     models = []
     for name, info in model_info.items():
@@ -197,6 +358,7 @@ def list_models():
             "false_positive_rate": info.get("false_positive_rate", 0.0),
             "detection_latency_ms": info.get("detection_latency_ms", 0.0),
             "is_active": name == _active_model_name,
+            "metrics_source": "training_metadata",
         })
 
     # If no metadata yet, return defaults
@@ -224,28 +386,76 @@ def list_models():
              "is_active": False},
         ]
 
-    return jsonify({"models": models,
-                    "active_model": _active_model_name,
-                    "trained_at": _metadata.get("trained_at", "")})
+    return jsonify({
+        "models": models,
+        "active_model": _active_model_name,
+        "trained_at": _metadata.get("trained_at", ""),
+        "metrics_source": "training_metadata",
+    })
 
 
 @app.route("/api/v1/metrics", methods=["GET"])
 def get_metrics():
-    model_info = _metadata.get("models", {}).get(_active_model_name, {})
+    """
+    Dashboard headline KPIs = **active inference model** evaluated on the saved
+    holdout split (eval_holdout.npz). Matches what you actually serve in /predict.
+    """
+    if _holdout_metrics and _active_model_name in _holdout_metrics:
+        res = _holdout_metrics[_active_model_name]
+    else:
+        res = None
+        for _r in _holdout_metrics.values():
+            if _r.get("model_name") == _active_model_name:
+                res = _r
+                break
+
+    if res:
+        hold_path = os.path.join(MODELS_DIR, "eval_holdout.npz")
+        n_test = int(len(np.load(hold_path)["y_test"])) if os.path.exists(hold_path) else _metadata.get("test_samples", 0)
+        return jsonify({
+            "model_name": res["model_name"],
+            "inference_model": _active_model_name,
+            "f1_score": float(res["f1_score"]),
+            "precision": float(res["precision"]),
+            "recall": float(res["recall"]),
+            "auc_roc": float(res["auc_roc"]),
+            "accuracy": float(res["accuracy"]),
+            "false_positive_rate": float(res["false_positive_rate"]),
+            "false_negative_rate": float(res["false_negative_rate"]),
+            "detection_latency_ms": float(res["detection_latency_ms"]),
+            "training_samples": _metadata.get("training_samples", 0),
+            "test_samples": n_test,
+            "trained_at": _metadata.get("trained_at", datetime.utcnow().isoformat() + "Z"),
+            "dataset": "BGL (Blue Gene/L) Supercomputer Logs",
+            "data_source": _metadata.get("data_source", "unknown"),
+            "eval_split": _metadata.get("eval_split", ""),
+            "metrics_source": "holdout_eval",
+        })
+
+    models_dict = _metadata.get("models", {})
+    model_info = dict(models_dict.get(_active_model_name, {}))
+    if not model_info and _metadata.get("best_model"):
+        model_info = dict(models_dict.get(_metadata["best_model"], {}))
+
     return jsonify({
         "model_name": _active_model_name,
-        "f1_score":             model_info.get("f1_score", 0.924),
-        "precision":            model_info.get("precision", 0.918),
-        "recall":               model_info.get("recall", 0.931),
-        "auc_roc":              model_info.get("auc_roc", 0.971),
-        "accuracy":             model_info.get("accuracy", 0.962),
-        "false_positive_rate":  model_info.get("false_positive_rate", 0.031),
-        "false_negative_rate":  model_info.get("false_negative_rate", 0.028),
-        "detection_latency_ms": model_info.get("detection_latency_ms", 0.42),
-        "training_samples":     _metadata.get("training_samples", 56000),
-        "test_samples":         _metadata.get("test_samples", 12000),
-        "trained_at":           _metadata.get("trained_at", datetime.utcnow().isoformat() + "Z"),
+        "inference_model": _active_model_name,
+        "f1_score": float(model_info.get("f1_score", 0.0) or 0.0),
+        "precision": float(model_info.get("precision", 0.0) or 0.0),
+        "recall": float(model_info.get("recall", 0.0) or 0.0),
+        "auc_roc": float(model_info.get("auc_roc", 0.5) or 0.5),
+        "accuracy": float(model_info.get("accuracy", 0.0) or 0.0),
+        "false_positive_rate": float(model_info.get("false_positive_rate", 0.0) or 0.0),
+        "false_negative_rate": float(model_info.get("false_negative_rate", 0.0) or 0.0),
+        "detection_latency_ms": float(model_info.get("detection_latency_ms", 0.0) or 0.0),
+        "training_samples": _metadata.get("training_samples", 56000),
+        "test_samples": _metadata.get("test_samples", 12000),
+        "trained_at": _metadata.get("trained_at", datetime.utcnow().isoformat() + "Z"),
         "dataset": "BGL (Blue Gene/L) Supercomputer Logs",
+        "data_source": _metadata.get("data_source", "unknown"),
+        "eval_split": _metadata.get("eval_split", ""),
+        "metrics_source": "training_metadata_fallback",
+        "warning": "eval_holdout.npz missing — run training to refresh metrics.",
     })
 
 
@@ -256,19 +466,26 @@ def predict():
     if not log_lines:
         return jsonify({"error": "log_lines required"}), 400
 
+    use_hf = bool(body.get("use_hf_semantics"))
+
     t0 = time.perf_counter()
     predictions = _predict_windows(log_lines)
     elapsed_ms = (time.perf_counter() - t0) * 1000
 
     n_anomaly = sum(1 for p in predictions if p["is_anomaly"])
+    summary = {
+        "total_windows": len(predictions),
+        "anomalies_detected": n_anomaly,
+        "anomaly_rate": round(n_anomaly / max(len(predictions), 1), 4),
+        "model": _active_model_name,
+    }
+
+    if use_hf:
+        summary["hf_semantics"] = _hf_zero_shot_semantics(log_lines)
+
     return jsonify({
         "predictions": predictions,
-        "summary": {
-            "total_windows": len(predictions),
-            "anomalies_detected": n_anomaly,
-            "anomaly_rate": round(n_anomaly / max(len(predictions), 1), 4),
-            "model": _active_model_name,
-        },
+        "summary": summary,
         "processing_time_ms": round(elapsed_ms, 2),
     })
 
