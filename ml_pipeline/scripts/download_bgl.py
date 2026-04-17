@@ -22,25 +22,44 @@ logger = logging.getLogger(__name__)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 
-# LogHub Zenodo mirror (direct download available)
-BGL_URLS = [
+# Full dataset (large) — Zenodo / GitHub release URLs change; try several.
+BGL_FULL_URLS = [
+    "https://zenodo.org/records/8275861/files/BGL.zip",
     "https://zenodo.org/record/8196385/files/BGL.tar.gz",
     "https://github.com/logpai/loghub/releases/download/v2.0/BGL.tar.gz",
 ]
+
+# Small **real** subset from LogHub (always available) — good for honest metrics without GB download
+BGL_SAMPLE_RAW = (
+    "https://raw.githubusercontent.com/logpai/loghub/master/BGL/BGL_2k.log"
+)
 
 
 def download_bgl():
     os.makedirs(DATA_DIR, exist_ok=True)
     out_path = os.path.join(DATA_DIR, "BGL.log")
+    sample_path = os.path.join(DATA_DIR, "BGL_2k.log")
 
     if os.path.exists(out_path):
         size_mb = os.path.getsize(out_path) / 1024 / 1024
         logger.info(f"BGL.log already exists ({size_mb:.1f} MB). Skipping download.")
         return out_path
 
+    # -- 1) Fast path: 2k real lines from LogHub GitHub (recommended minimum for dev) --
+    try:
+        logger.info(f"Downloading real sample {BGL_SAMPLE_RAW} …")
+        r = requests.get(BGL_SAMPLE_RAW, timeout=120)
+        r.raise_for_status()
+        with open(sample_path, "wb") as f:
+            f.write(r.content)
+        logger.info(f"Saved real BGL subset to {sample_path} ({len(r.content)/1024:.1f} KB)")
+        return sample_path
+    except Exception as e:
+        logger.warning(f"Sample download failed: {e}")
+
     downloaded = None
-    for url in BGL_URLS:
-        archive_name = os.path.basename(url)
+    for url in BGL_FULL_URLS:
+        archive_name = os.path.basename(url.split("?")[0])
         archive_path = os.path.join(DATA_DIR, archive_name)
         logger.info(f"Attempting download from: {url}")
         try:
