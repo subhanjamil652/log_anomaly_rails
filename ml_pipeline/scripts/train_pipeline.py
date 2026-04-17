@@ -27,16 +27,22 @@ def main():
         description="Train BGL log anomaly detection models")
     parser.add_argument("--data", type=str, default=None,
                         help="Path to BGL.log dataset file")
-    parser.add_argument("--samples", type=int, default=80_000,
-                        help="Number of synthetic samples if real data unavailable")
+    parser.add_argument("--samples", type=int, default=150_000,
+                        help="Synthetic log lines if BGL.log is missing (larger => stabler metrics)")
     parser.add_argument("--save-dir", type=str, default=None,
                         help="Directory to save model artifacts")
+    parser.add_argument(
+        "--synthetic",
+        action="store_true",
+        help="Ignore data/BGL*.log and train on synthetic data only (large --samples recommended)",
+    )
     args = parser.parse_args()
 
     trainer = AnomalyDetectionTrainer(save_dir=args.save_dir)
     metadata = trainer.run_full_pipeline(
         data_path=args.data,
         synthetic_samples=args.samples,
+        force_synthetic=args.synthetic,
     )
 
     print("\n" + "=" * 60)
