@@ -13,13 +13,14 @@ Flow:
 """
 
 import os
+import sys
 import json
 import time
 import logging
+import subprocess
 import numpy as np
 import joblib
 from datetime import datetime
-from sklearn.model_selection import train_test_split
 
 from .data_loader import BGLDataLoader
 from .drain_parser import DrainParser
@@ -36,7 +37,8 @@ logger = logging.getLogger(__name__)
 F1_THRESHOLD = 0.88          # Minimum acceptable F1 before fallback
 WINDOW_SIZE  = 20
 STRIDE       = 10
-TEST_SIZE    = 0.15
+# Larger test holdout + chronological split → realistic metrics (no overlapping-window leakage)
+TEST_SIZE    = 0.20
 VAL_SIZE     = 0.15
 
 
@@ -46,12 +48,87 @@ class AnomalyDetectionTrainer:
     def __init__(self, save_dir: str = None):
         base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.save_dir = save_dir or os.path.join(base, "saved_models")
+        self._training_data_file = None
         os.makedirs(self.save_dir, exist_ok=True)
+
+    def _base_dir(self) -> str:
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def _resolve_data_path(self, data_path: str | None, force_synthetic: bool = False) -> tuple[str | None, bool]:
+        """
+        Returns (path_or_none, use_synthetic).
+        Prefers explicit path, then ml_pipeline/data/BGL.log, then download script.
+        """
+        if force_synthetic:
+            return None, True
+
+        base = self._base_dir()
+        candidates = []
+        if data_path:
+            candidates.append(os.path.abspath(data_path))
+        candidates.append(os.path.join(base, "data", "BGL.log"))
+        candidates.append(os.path.join(base, "data", "BGL_2k.log"))
+
+        for p in candidates:
+            if p and os.path.isfile(p):
+                logger.info("Using real BGL logs: %s", p)
+                return p, False
+
+        dl = self._try_download_bgl()
+        if dl and os.path.isfile(dl):
+            logger.info("Using downloaded BGL logs: %s", dl)
+            return dl, False
+
+        logger.warning(
+            "No BGL.log found — training on synthetic data. "
+            "For realistic metrics, run: python scripts/download_bgl.py "
+            "then re-run training."
+        )
+        return None, True
+
+    def _try_download_bgl(self) -> str | None:
+        script = os.path.join(self._base_dir(), "scripts", "download_bgl.py")
+        if not os.path.isfile(script):
+            return None
+        logger.info("Attempting to download BGL dataset from LogHub (Zenodo) …")
+        try:
+            subprocess.run(
+                [sys.executable, script],
+                cwd=self._base_dir(),
+                timeout=900,
+                check=False,
+            )
+        except Exception as e:
+            logger.warning("download_bgl.py: %s", e)
+        out = os.path.join(self._base_dir(), "data", "BGL.log")
+        return out if os.path.isfile(out) else None
+
+    def _chronological_split(self, X: np.ndarray, y: np.ndarray):
+        """
+        Time-ordered split (windows follow log order). Reduces train/test leakage from
+        overlapping sliding windows vs i.i.d. stratified split (which inflates scores).
+        """
+        n = X.shape[0]
+        test_n = max(1, int(round(n * TEST_SIZE)))
+        test_n = min(test_n, max(1, n - 20))
+        trainval_n = n - test_n
+        val_ratio = VAL_SIZE / (1.0 - TEST_SIZE)
+        val_n = int(round(trainval_n * val_ratio))
+        val_n = max(1, min(val_n, trainval_n - 10))
+        t_end = trainval_n - val_n
+        X_train = X[:t_end]
+        y_train = y[:t_end]
+        X_val = X[t_end:trainval_n]
+        y_val = y[t_end:trainval_n]
+        X_test = X[trainval_n:]
+        y_test = y[trainval_n:]
+        return X_train, X_val, X_test, y_train, y_val, y_test
 
     # -- Main entry point ------------------------------------------------------
 
     def run_full_pipeline(self, data_path: str = None,
-                          synthetic_samples: int = 80_000) -> dict:
+                          synthetic_samples: int = 80_000,
+                          force_synthetic: bool = False) -> dict:
         """
         Execute the complete training pipeline.
         If data_path is None or file not found, synthetic BGL data is used.
@@ -65,12 +142,17 @@ class AnomalyDetectionTrainer:
         parser = DrainParser(depth=4, sim_threshold=0.4)
         loader = BGLDataLoader(drain_parser=parser)
 
-        if data_path and os.path.exists(data_path):
-            logger.info(f"Loading real BGL dataset from {data_path}")
-            df = loader.load_sample(data_path, n=200_000)
+        resolved, use_synthetic = self._resolve_data_path(data_path, force_synthetic=force_synthetic)
+        self._training_data_file = resolved
+
+        if not use_synthetic and resolved:
+            logger.info("Loading real BGL dataset (sample up to 400k lines) …")
+            df = loader.load_sample(resolved, n=400_000)
         else:
-            logger.info("Real BGL dataset not found - generating synthetic BGL data.")
-            logger.info("(Download the real dataset from https://github.com/logpai/loghub/tree/master/BGL)")
+            logger.info(
+                "Generating synthetic BGL — metrics are illustrative; "
+                "use data/BGL.log for production-like scores."
+            )
             df = loader.generate_synthetic_bgl(n_samples=synthetic_samples)
 
         logger.info(f"Dataset: {len(df):,} entries, "
@@ -89,16 +171,23 @@ class AnomalyDetectionTrainer:
         fe.save(os.path.join(self.save_dir, "feature_engineer.pkl"))
         logger.info(f"Feature matrix: {X.shape}")
 
-        # -- 4. Train/Val/Test split -------------------------------------------
-        X_trainval, X_test, y_trainval, y_test = train_test_split(
-            X, y, test_size=TEST_SIZE, stratify=y, random_state=42)
-        val_ratio = VAL_SIZE / (1 - TEST_SIZE)
-        X_train, X_val, y_train, y_val = train_test_split(
-            X_trainval, y_trainval, test_size=val_ratio,
-            stratify=y_trainval, random_state=42)
+        # -- 4. Train/Val/Test split (chronological; no stratify — avoids leakage) ---
+        X_train, X_val, X_test, y_train, y_val, y_test = self._chronological_split(X, y)
+        logger.info(
+            "Chronological split — Train: %s  Val: %s  Test: %s "
+            "(anomaly %% train/val/test: %.1f / %.1f / %.1f)",
+            f"{len(X_train):,}",
+            f"{len(X_val):,}",
+            f"{len(X_test):,}",
+            100.0 * y_train.mean(),
+            100.0 * y_val.mean(),
+            100.0 * y_test.mean(),
+        )
 
-        logger.info(f"Split - Train: {len(X_train):,}  Val: {len(X_val):,}  "
-                    f"Test: {len(X_test):,}")
+        # Persist holdout for API runtime metrics (same split as training eval)
+        holdout_npz = os.path.join(self.save_dir, "eval_holdout.npz")
+        np.savez_compressed(holdout_npz, X_test=X_test, y_test=y_test)
+        logger.info(f"Saved holdout evaluation set: {holdout_npz}")
 
         # -- 5. SMOTE ---------------------------------------------------------
         X_train_res, y_train_res = self._apply_smote(X_train, y_train)
@@ -135,6 +224,12 @@ class AnomalyDetectionTrainer:
             "best_model": best_name,
             "best_f1": best_f1,
             "trained_at": datetime.utcnow().isoformat() + "Z",
+            "data_source": (
+                "synthetic"
+                if use_synthetic
+                else os.path.basename(self._training_data_file or "BGL.log")
+            ),
+            "eval_split": "chronological",
             "training_samples": int(len(X_train_res)),
             "test_samples": int(len(X_test)),
             "window_size": WINDOW_SIZE,
@@ -179,17 +274,20 @@ class AnomalyDetectionTrainer:
                 results[name] = result
                 self._save_model(model, self._safe_fname(name))
 
-                # SHAP for tree/linear models
+                # SHAP is optional — must not wipe a good train/eval result on failure
                 if name in ("Random Forest", "Logistic Regression"):
-                    mtype = "rf" if "Forest" in name else "lr"
-                    explainer = SHAPExplainer(model, feature_names, model_type=mtype)
-                    explainer.fit_background(X_train[:200])
-                    global_imp = explainer.get_global_importance(X_test[:100])
-                    result["shap_global"] = {k: v for k, v in
-                                             list(global_imp.items())[:15]}
-                    joblib.dump(explainer,
-                                os.path.join(self.save_dir,
-                                             f"shap_{self._safe_fname(name)}.pkl"))
+                    try:
+                        mtype = "rf" if "Forest" in name else "lr"
+                        explainer = SHAPExplainer(model, feature_names, model_type=mtype)
+                        explainer.fit_background(X_train[:200])
+                        global_imp = explainer.get_global_importance(X_test[:100])
+                        results[name]["shap_global"] = {k: v for k, v in
+                                                        list(global_imp.items())[:15]}
+                        joblib.dump(explainer,
+                                    os.path.join(self.save_dir,
+                                                 f"shap_{self._safe_fname(name)}.pkl"))
+                    except Exception as shap_err:
+                        logger.warning("SHAP skipped for %s: %s", name, shap_err)
 
             except Exception as e:
                 logger.error(f"Failed to train {name}: {e}")
@@ -209,7 +307,7 @@ class AnomalyDetectionTrainer:
         try:
             from imblearn.over_sampling import SMOTE
             logger.info("Applying SMOTE oversampling ...")
-            sm = SMOTE(sampling_strategy=0.5, random_state=42, n_jobs=-1)
+            sm = SMOTE(sampling_strategy=0.5, random_state=42)
             X_res, y_res = sm.fit_resample(X, y)
             logger.info(f"SMOTE: {len(X):,} -> {len(X_res):,} samples "
                         f"(anomaly rate: {y_res.mean()*100:.1f}%)")
