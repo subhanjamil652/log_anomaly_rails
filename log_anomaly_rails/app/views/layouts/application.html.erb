@@ -229,6 +229,16 @@
       .severity-low      { border-left: 3px solid var(--accent-green) !important; }
 
       /* -- Tables -- */
+      /* Override Bootstrap 5 table vars so cells are not white-bg + dark-theme text (unreadable). */
+      .table-dark-custom.table {
+        --bs-table-color: var(--text-primary);
+        --bs-table-bg: transparent;
+        --bs-table-border-color: var(--border-color);
+        --bs-table-striped-bg: rgba(255, 255, 255, 0.03);
+        --bs-table-hover-bg: rgba(255, 255, 255, 0.06);
+        --bs-table-active-bg: rgba(255, 255, 255, 0.08);
+      }
+
       .table-dark-custom {
         color: var(--text-primary);
         border-color: var(--border-color);
