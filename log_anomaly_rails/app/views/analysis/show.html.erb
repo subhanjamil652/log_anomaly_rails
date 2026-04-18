@@ -36,6 +36,38 @@
   </div>
 </div>
 
+<% hf = @summary["hf_semantics"] if @summary.is_a?(Hash) %>
+<% if hf.present? %>
+  <div class="card-dark mb-4" style="border-color:#475569;">
+    <h6 class="fw-semibold mb-2"><i class="bi bi-cloud me-2" style="color:#a855f7;"></i>Hugging Face semantic check</h6>
+    <% if hf["error"].present? %>
+      <p class="mb-0" style="font-size:0.85rem;color:#f87171;"><%= hf["error"] %><% if hf["detail"].present? %> — <%= hf["detail"].to_s.truncate(200) %><% end %></p>
+    <% else %>
+      <div class="row g-2">
+        <div class="col-md-4">
+          <span style="font-size:0.78rem;color:var(--text-secondary);">Model</span>
+          <div style="font-size:0.85rem;"><%= hf["model"] %></div>
+        </div>
+        <div class="col-md-4">
+          <span style="font-size:0.78rem;color:var(--text-secondary);">Semantic anomaly score</span>
+          <div style="font-size:1rem;font-weight:600;color:<%= hf["likely_anomaly_semantics"] ? '#ef4444' : '#22c55e' %>;">
+            <%= hf["semantic_anomaly_score"] %>
+            <% if hf["likely_anomaly_semantics"] %>
+              <span class="badge badge-critical rounded-pill ms-1">anomaly-leaning</span>
+            <% else %>
+              <span class="badge rounded-pill ms-1" style="background:rgba(34,197,94,0.15);color:#86efac;">normal-leaning</span>
+            <% end %>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <span style="font-size:0.78rem;color:var(--text-secondary);">Note</span>
+          <div style="font-size:0.8rem;color:var(--text-secondary);">NLI labels are complementary to the sliding-window Random Forest scores above.</div>
+        </div>
+      </div>
+    <% end %>
+  </div>
+<% end %>
+
 <div class="row g-3">
   <!-- Predictions Table -->
   <div class="col-lg-7">
@@ -52,7 +84,7 @@
                   <% if pred['is_anomaly'] %>
                     <span class="badge badge-critical rounded-pill"><i class="bi bi-exclamation-circle me-1"></i>ANOMALY</span>
                   <% else %>
-                    <span class="badge" style="background:rgba(34,197,94,0.15);color:#86efac;" class="rounded-pill">NORMAL</span>
+                    <span class="badge rounded-pill" style="background:rgba(34,197,94,0.15);color:#86efac;">NORMAL</span>
                   <% end %>
                 </td>
                 <td>
@@ -86,7 +118,8 @@
   <h6 class="fw-semibold mb-3"><i class="bi bi-file-code me-2" style="color:#06b6d4;"></i>Log Lines (colour-coded)</h6>
   <div class="log-terminal">
     <% @lines.first(100).each_with_index do |line, i| %>
-      <% is_anom = @preds[i]&.dig("is_anomaly") %>
+      <% pl = prediction_for_line(@preds, i, @lines.size) %>
+      <% is_anom = pl&.dig("is_anomaly") %>
       <div class="<%= is_anom ? 'log-anomaly' : line.include?('WARNING') ? 'log-warning' : 'log-normal' %>">
         <span style="color:#475569;user-select:none;margin-right:0.5rem;"><%= "%04d" % (i+1) %></span><%= line %>
       </div>
