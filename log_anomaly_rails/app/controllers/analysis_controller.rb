@@ -1,6 +1,7 @@
 class AnalysisController < ApplicationController
   def index
     @sample_logs = sample_bgl_lines
+    @metrics = MlApiService.get_metrics
   end
 
   def create
@@ -14,11 +15,11 @@ class AnalysisController < ApplicationController
       redirect_to analysis_path, alert: "No log lines provided." and return
     end
 
-    result    = MlApiService.predict(lines)
+    use_hf = ActiveModel::Type::Boolean.new.cast(params[:use_hf_semantics])
+    result    = MlApiService.predict(lines, use_hf_semantics: use_hf)
     explain   = MlApiService.explain(lines.first(20))
     preds     = result["predictions"] || []
     summary   = result["summary"] || {}
-    n_anomaly = preds.count { |p| p["is_anomaly"] }
 
     # Persist anomaly alerts
     preds.each do |pred|
@@ -51,27 +52,22 @@ class AnalysisController < ApplicationController
       )
     end
 
-    @result   = result
-    @lines    = lines
-    @preds    = preds
-    @summary  = summary
-    @explain  = explain
-    @n_anomaly = n_anomaly
+    # Session must use string keys — cookie store may not preserve symbol access consistently.
     session[:last_analysis] = {
-      lines: lines.first(200),
-      preds: preds,
-      summary: summary,
-      explain: explain,
+      "lines" => lines.first(200),
+      "preds" => preds,
+      "summary" => summary,
+      "explain" => explain
     }
-    render :show
+    redirect_to analysis_result_path("current"), status: :see_other
   end
 
   def show
     data = session[:last_analysis] || {}
-    @lines   = data["lines"] || []
-    @preds   = data["preds"] || []
-    @summary = data["summary"] || {}
-    @explain = data["explain"] || {}
+    @lines   = data["lines"] || data[:lines] || []
+    @preds   = data["preds"] || data[:preds] || []
+    @summary = data["summary"] || data[:summary] || {}
+    @explain = data["explain"] || data[:explain] || {}
     @n_anomaly = @preds.count { |p| p["is_anomaly"] }
     if @lines.empty?
       redirect_to analysis_path, notice: "No analysis data. Please submit logs."
@@ -108,7 +104,7 @@ class AnalysisController < ApplicationController
       "FATAL 1117906684 2005.06.04 10:51:24.913855 R23-M0-N09-C0-J01 RAS KERNEL KERNEL data bus error",
       "- 1117907000 2005.06.04 10:57:30.000000 R01-M0-N02-J00 RAS APP APP program loaded",
       "SEVERE 1117908000 2005.06.04 11:00:00.000000 R05-M1-N08-J00 RAS KERNEL KERNEL uncorrectable ECC memory error at address 0x7f9a",
-      "- 1117909000 2005.06.04 11:17:30.000000 R12-M2-N01-J00 RAS APP APP job 44321 completed successfully",
+      "- 1117909000 2005.06.04 11:17:30.000000 R12-M2-N01-J00 RAS APP APP job 44321 completed successfully"
     ]
   end
 end
