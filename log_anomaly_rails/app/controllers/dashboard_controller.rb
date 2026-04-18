@@ -3,6 +3,7 @@ class DashboardController < ApplicationController
     @metrics      = MlApiService.get_metrics
     @models_resp  = MlApiService.get_models
     @models       = @models_resp["models"] || []
+    @metrics_source = @models_resp["metrics_source"] || @metrics["metrics_source"]
     @active_model = @models.find { |m| m["is_active"] } || @models.first
 
     # Stats for stat cards
@@ -27,7 +28,7 @@ class DashboardController < ApplicationController
       "critical" => AnomalyAlert.where(severity: "critical").count,
       "high"     => AnomalyAlert.where(severity: "high").count,
       "medium"   => AnomalyAlert.where(severity: "medium").count,
-      "low"      => AnomalyAlert.where(severity: "low").count,
+      "low"      => AnomalyAlert.where(severity: "low").count
     }
   end
 end
