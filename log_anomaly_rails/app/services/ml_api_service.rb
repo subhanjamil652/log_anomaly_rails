@@ -6,7 +6,7 @@ require "uri"
 # Falls back to realistic mock data when the API is unreachable (demo mode).
 class MlApiService
   API_BASE = ENV.fetch("ML_API_URL", "http://localhost:5001")
-  TIMEOUT  = 8  # seconds
+  TIMEOUT  = 30  # seconds (HF semantic calls can be slow)
 
   # -- Public interface -----------------------------------------------------
 
@@ -17,9 +17,12 @@ class MlApiService
       "model_name" => "Random Forest", "uptime_seconds" => 0, "error" => e.message }
   end
 
-  def self.predict(log_lines)
-    post("/api/v1/predict", { log_lines: log_lines })
-  rescue => e
+  def self.predict(log_lines, use_hf_semantics: false)
+    body = { log_lines: log_lines }
+    body[:use_hf_semantics] = true if use_hf_semantics
+    post("/api/v1/predict", body)
+  rescue StandardError => e
+    Rails.logger.warn("[MlApiService] predict fallback: #{e.class} — #{e.message}") if defined?(Rails) && Rails.logger
     mock_predict(log_lines)
   end
 
@@ -55,6 +58,8 @@ class MlApiService
     http.open_timeout = TIMEOUT
     http.read_timeout = TIMEOUT
     response = http.get(uri.path)
+    raise StandardError, "HTTP #{response.code}" unless response.is_a?(Net::HTTPSuccess)
+
     JSON.parse(response.body)
   end
 
@@ -66,6 +71,10 @@ class MlApiService
     request = Net::HTTP::Post.new(uri.path, "Content-Type" => "application/json")
     request.body = body.to_json
     response = http.request(request)
+    unless response.is_a?(Net::HTTPSuccess)
+      raise StandardError, "HTTP #{response.code}: #{response.body.to_s[0, 200]}"
+    end
+
     JSON.parse(response.body)
   end
 
@@ -81,7 +90,7 @@ class MlApiService
         "is_anomaly"   => is_anom,
         "confidence"   => (is_anom ? score : 1 - score).round(4),
         "anomaly_score" => score.round(4),
-        "model"        => "Random Forest",
+        "model"        => "Random Forest"
       }
     end
     n_anom = predictions.count { |p| p["is_anomaly"] }
@@ -90,10 +99,10 @@ class MlApiService
       "summary" => {
         "total_windows"     => predictions.size,
         "anomalies_detected" => n_anom,
-        "anomaly_rate"      => (n_anom.to_f / [predictions.size, 1].max).round(4),
-        "model"             => "Random Forest",
+        "anomaly_rate"      => (n_anom.to_f / [ predictions.size, 1 ].max).round(4),
+        "model"             => "Random Forest"
       },
-      "processing_time_ms" => (predictions.size * 0.42).round(2),
+      "processing_time_ms" => (predictions.size * 0.42).round(2)
     }
   end
 
@@ -111,7 +120,7 @@ class MlApiService
       "training_samples"      => 56_832,
       "test_samples"          => 12_000,
       "trained_at"            => 2.days.ago.iso8601,
-      "dataset"               => "BGL (Blue Gene/L) Supercomputer Logs",
+      "dataset"               => "BGL (Blue Gene/L) Supercomputer Logs"
     }
   end
 
@@ -133,14 +142,14 @@ class MlApiService
           "auc_roc"  => 0.884, "accuracy"  => 0.907,
           "false_positive_rate" => 0.071,  "detection_latency_ms" => 0.67,
           "is_active" => false },
-        { "name" => "Logistic Regression","type" => "supervised",
+        { "name" => "Logistic Regression", "type" => "supervised",
           "f1_score" => 0.847, "precision" => 0.831, "recall" => 0.863,
           "auc_roc"  => 0.921, "accuracy"  => 0.934,
           "false_positive_rate" => 0.059,  "detection_latency_ms" => 0.08,
-          "is_active" => false },
+          "is_active" => false }
       ],
       "active_model" => "Random Forest",
-      "trained_at"   => 2.days.ago.iso8601,
+      "trained_at"   => 2.days.ago.iso8601
     }
   end
 
@@ -156,10 +165,10 @@ class MlApiService
         { "name" => "sev_std",             "value" => 0.134, "direction" => "positive" },
         { "name" => "window_duration_s",   "value" => -0.089, "direction" => "negative" },
         { "name" => "template_diversity",  "value" => -0.071, "direction" => "negative" },
-        { "name" => "event_rate_per_s",    "value" => 0.063,  "direction" => "positive" },
+        { "name" => "event_rate_per_s",    "value" => 0.063,  "direction" => "positive" }
       ],
       "top_anomaly_indicators" => %w[fatal_count sev_max error_count max_template_repeat tfidf_rts],
-      "model" => "Random Forest",
+      "model" => "Random Forest"
     }
   end
 
@@ -171,14 +180,14 @@ class MlApiService
       "total of <N> nodes in partition",
       "job <N> completed successfully",
       "memory module <N> initialized",
-      "torus network link <N> active",
+      "torus network link <N> active"
     ]
     anomaly_msgs = [
       "data bus error on node <N>",
       "uncorrectable ECC memory error at address <N>",
       "FATAL: memory scrubbing failed on DIMM <N>",
       "machine check exception on node <N>",
-      "link failure detected on torus port <N>",
+      "link failure detected on torus port <N>"
     ]
     rng = Random.new
     logs = n_logs.times.map do |i|
@@ -195,13 +204,13 @@ class MlApiService
         "confidence"    => (is_anom ? score : 1 - score).round(4),
         "component"     => component,
         "level"         => level,
-        "template"      => template,
+        "template"      => template
       }
     end
     n_anom = logs.count { |l| l["is_anomaly"] }
     {
       "logs" => logs,
-      "summary" => { "total" => n_logs, "anomalies" => n_anom, "normal" => n_logs - n_anom },
+      "summary" => { "total" => n_logs, "anomalies" => n_anom, "normal" => n_logs - n_anom }
     }
   end
 end
