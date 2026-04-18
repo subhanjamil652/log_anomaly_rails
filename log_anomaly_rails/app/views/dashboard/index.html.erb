@@ -1,5 +1,22 @@
 <% content_for :page_title, "Dashboard" %>
 
+<% if @metrics["warning"].present? %>
+  <div class="flash-alert mb-3" style="font-size:0.82rem;"><i class="bi bi-info-circle me-2"></i><%= @metrics["warning"] %></div>
+<% end %>
+<% if @metrics["data_source"].present? %>
+  <div class="mb-2" style="font-size:0.78rem;color:var(--text-secondary);">
+    Training data: <strong style="color:var(--text-primary);"><%= @metrics["data_source"] %></strong>
+    <% if @metrics["eval_split"].present? %> · eval split: <code style="font-size:0.72rem;"><%= @metrics["eval_split"] %></code><% end %>
+    · <%= @metrics["test_samples"].to_i %> holdout windows
+  </div>
+<% end %>
+<% if @metrics_source.present? && @metrics_source != "holdout_eval" %>
+  <div class="mb-3" style="font-size:0.78rem;color:var(--text-secondary);">
+    Metrics source: <code style="font-size:0.75rem;"><%= @metrics_source %></code>
+    <% if @metrics_source == "training_metadata" %> — run ML training to generate <code style="font-size:0.75rem;">eval_holdout.npz</code> for live holdout scores.<% end %>
+  </div>
+<% end %>
+
 <!-- Stat Cards Row -->
 <div class="row g-3 mb-4">
   <div class="col-md-3">
@@ -20,7 +37,7 @@
       </div>
       <div>
         <div class="stat-value"><%= (@metrics["f1_score"].to_f * 100).round(1) %>%</div>
-        <div class="stat-label">F1-Score (Best Model)</div>
+        <div class="stat-label">F1 (active model, holdout)</div>
       </div>
     </div>
   </div>
@@ -42,7 +59,7 @@
       </div>
       <div>
         <div class="stat-value"><%= (@metrics["false_positive_rate"].to_f * 100).round(1) %>%</div>
-        <div class="stat-label">False Positive Rate</div>
+        <div class="stat-label">FPR (holdout)</div>
       </div>
     </div>
   </div>
@@ -120,10 +137,12 @@
 <div class="card-dark">
   <h6 class="mb-3 fw-semibold"><i class="bi bi-info-circle me-2" style="color:#3b82f6;"></i>System Overview — BGL Dataset</h6>
   <div class="row text-center g-3">
-    <% stats = [["4,747,963","BGL Log Messages","#3b82f6"],["348,460","Labelled Anomalies","#ef4444"],
-                ["#{(@metrics['auc_roc'].to_f*100).round(1)}%","AUC-ROC Score","#22c55e"],
-                ["#{@metrics['detection_latency_ms']&.round(2) || 0.42}ms","Detection Latency","#f59e0b"],
-                ["Drain","Log Parser","#a855f7"],["SHAP","Explainability","#06b6d4"]] %>
+    <% stats = [
+         [@metrics["test_samples"].to_i.positive? ? number_with_delimiter(@metrics["test_samples"].to_i) : "—","Holdout test windows","#3b82f6"],
+         [@metrics["training_samples"].to_i.positive? ? number_with_delimiter(@metrics["training_samples"].to_i) : "—","Training windows","#64748b"],
+         ["#{(@metrics['auc_roc'].to_f*100).round(1)}%","AUC-ROC (active, holdout)","#22c55e"],
+         ["#{@metrics['detection_latency_ms']&.to_f&.round(3) || "—"}ms","Latency / window (est.)","#f59e0b"],
+         ["Drain","Log Parser","#a855f7"],["SHAP","Explainability","#06b6d4"]] %>
     <% stats.each do |val, label, color| %>
       <div class="col">
         <div style="font-size:1.4rem;font-weight:700;color:<%= color %>;"><%= val %></div>
