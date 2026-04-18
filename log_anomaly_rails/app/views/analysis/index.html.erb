@@ -56,6 +56,15 @@ FATAL 1117906684 2005.06.04 10:51:24.913855 R23-M0-N09-C0-J01 RAS KERNEL KERNEL 
           </div>
         </div>
 
+        <div class="form-check mb-3">
+          <input class="form-check-input" type="checkbox" name="use_hf_semantics" id="use_hf_semantics" value="1"
+                 style="margin-top:0.35rem;">
+          <label class="form-check-label" for="use_hf_semantics" style="font-size:0.82rem;color:var(--text-secondary);">
+            Run <strong style="color:var(--text-primary);">Hugging Face</strong> zero-shot semantic check (NLI) on the pasted logs.
+            Set <code style="font-size:0.75rem;">HF_TOKEN</code> or <code style="font-size:0.75rem;">HUGGING_FACE_HUB_TOKEN</code> in your environment (e.g. <code style="font-size:0.75rem;">~/.zshrc</code>).
+          </label>
+        </div>
+
         <div class="d-flex gap-2">
           <button type="submit" class="btn btn-primary-custom" id="submit-btn">
             <i class="bi bi-lightning-fill me-1"></i>Analyse Logs
@@ -87,12 +96,22 @@ FATAL 1117906684 2005.06.04 10:51:24.913855 R23-M0-N09-C0-J01 RAS KERNEL KERNEL 
     </div>
 
     <div class="card-dark">
-      <h6 class="fw-semibold mb-2"><i class="bi bi-lightning me-2" style="color:#f59e0b;"></i>Model Performance</h6>
-      <% [["F1-Score","0.924","#22c55e"],["Precision","0.918","#3b82f6"],["Recall","0.931","#a855f7"],["AUC-ROC","0.971","#f59e0b"]].each do |metric, val, color| %>
-        <div class="d-flex justify-content-between align-items-center mb-2">
-          <span style="font-size:0.8rem;color:var(--text-secondary);"><%= metric %></span>
-          <span style="font-size:0.85rem;font-weight:600;color:<%= color %>;"><%= val %></span>
-        </div>
+      <h6 class="fw-semibold mb-2"><i class="bi bi-lightning me-2" style="color:#f59e0b;"></i>Active model (API)</h6>
+      <% if @metrics.present? %>
+        <% [
+             ["F1", @metrics["f1_score"], "#22c55e"],
+             ["Precision", @metrics["precision"], "#3b82f6"],
+             ["Recall", @metrics["recall"], "#a855f7"],
+             ["AUC-ROC", @metrics["auc_roc"], "#f59e0b"],
+           ].each do |metric, val, color| %>
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <span style="font-size:0.8rem;color:var(--text-secondary);"><%= metric %></span>
+            <span style="font-size:0.85rem;font-weight:600;color:<%= color %>;"><%= val.nil? ? "—" : val.to_f.round(4) %></span>
+          </div>
+        <% end %>
+        <p class="mb-0 mt-2" style="font-size:0.7rem;color:var(--text-secondary);">Holdout metrics for <strong style="color:var(--text-primary);"><%= @metrics["model_name"] || "active model" %></strong></p>
+      <% else %>
+        <p style="font-size:0.78rem;color:var(--text-secondary);">Start the ML API to load live metrics.</p>
       <% end %>
     </div>
   </div>
