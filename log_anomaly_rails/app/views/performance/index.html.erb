@@ -1,5 +1,17 @@
 <% content_for :page_title, "Model Performance" %>
 
+<% if @metrics_source.present? %>
+  <p class="mb-3" style="font-size:0.8rem;color:var(--text-secondary);">
+    <% if @metrics_source == "holdout_eval" %>
+      <i class="bi bi-check2-circle me-1" style="color:#22c55e;"></i>
+      Figures below are <strong style="color:var(--text-primary);">recomputed on the saved holdout split</strong> (same test set for every checkpoint). “Best” = highest F1 on that split.
+    <% else %>
+      <i class="bi bi-exclamation-triangle me-1" style="color:#f59e0b;"></i>
+      Metrics source: <code style="font-size:0.75rem;"><%= @metrics_source %></code> — run <code style="font-size:0.75rem;">python scripts/train_pipeline.py</code> in <code style="font-size:0.75rem;">ml_pipeline</code> to refresh.
+    <% end %>
+  </p>
+<% end %>
+
 <!-- Best model highlight -->
 <% if @best %>
 <div class="card-dark mb-4" style="border-color:#3b82f6;background:rgba(59,130,246,0.06);">
@@ -41,7 +53,7 @@
         <% @models.each do |m| %>
           <tr class="<%= m['is_active'] ? '' : '' %>">
             <td>
-              <span class="fw-semibold" style="color:var(--text-primary);">
+              <span class="fw-semibold">
                 <% if m['name'] == @best&.dig('name') %><i class="bi bi-star-fill me-1" style="color:#f59e0b;"></i><% end %>
                 <%= m['name'] %>
               </span>
