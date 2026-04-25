@@ -128,6 +128,6 @@ if __name__ == "__main__":
         print(f"\nBGL dataset ready at: {result}")
         print("Run training with: python scripts/train_pipeline.py --data data/BGL.log")
     else:
-        print("\nProceeding with synthetic data is also supported:")
+        print("\nYou can still train using a BGL-format proxy dataset:")
         print("  python scripts/train_pipeline.py")
         sys.exit(1)

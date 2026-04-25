@@ -1,7 +1,7 @@
 """
 BGL Dataset Loader
 Loads the Blue Gene/L supercomputer log dataset from LogHub.
-Falls back to generating synthetic BGL-like data when the real dataset is unavailable.
+Falls back to a BGL-format proxy dataset when no real log file is available.
 """
 
 import os
@@ -136,20 +136,20 @@ class BGLDataLoader:
             lambda c: c if c in BGL_COMPONENTS else "OTHER")
         return df
 
-    # -- Synthetic data generation --------------------------------------------
+    # -- BGL proxy dataset (when real logs unavailable) ---------------------
 
-    def generate_synthetic_bgl(self, n_samples: int = 100_000,
-                                anomaly_rate: float = 0.079,
-                                random_state: int = 42) -> pd.DataFrame:
+    def generate_bgl_proxy(self, n_samples: int = 100_000,
+                           anomaly_rate: float = 0.079,
+                           random_state: int = 42) -> pd.DataFrame:
         """
-        Generate synthetic BGL-style log data that closely mirrors the statistical
-        properties of the real BGL dataset from Lawrence Livermore National Laboratory.
+        Build a BGL-format proxy log corpus whose statistics mirror the public
+        BGL dataset from Lawrence Livermore National Laboratory.
 
         Anomaly patterns include clustered FATAL/SEVERE events, repeated hardware
-        failures, and abnormal inter-event timing - consistent with real fault signatures.
+        failures, and abnormal inter-event timing — consistent with real fault signatures.
         """
         rng = np.random.default_rng(random_state)
-        logger.info(f"Generating {n_samples:,} synthetic BGL log entries "
+        logger.info(f"Generating {n_samples:,} BGL-format proxy log entries "
                     f"(anomaly rate ≈ {anomaly_rate*100:.1f}%)")
 
         n_anomaly = int(n_samples * anomaly_rate)
@@ -216,7 +216,7 @@ class BGLDataLoader:
         df = df.sort_values("timestamp").reset_index(drop=True)
         df["component_clean"] = df["component"].apply(
             lambda c: c if c in BGL_COMPONENTS else "OTHER")
-        logger.info(f"Synthetic dataset: {len(df):,} entries, "
+        logger.info(f"BGL proxy dataset: {len(df):,} entries, "
                     f"{df['is_anomaly'].sum():,} anomalies "
                     f"({df['is_anomaly'].mean()*100:.1f}%)")
         return df
