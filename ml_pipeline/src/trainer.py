@@ -2,7 +2,7 @@
 Training Orchestrator - runs the full BGL log anomaly detection pipeline.
 
 Flow:
-  1. Load BGL data (real or synthetic)
+  1. Load BGL data (file or BGL-format proxy when missing)
   2. Parse with Drain
   3. Feature engineering + sliding windows
   4. SMOTE oversampling
@@ -29,6 +29,11 @@ from .models.logistic_regression_model import LogisticRegressionModel
 from .models.random_forest_model import RandomForestModel
 from .models.isolation_forest_model import IsolationForestModel
 from .models.lstm_autoencoder import LSTMAutoencoder
+from .models.bert_log_model import BERTLogModel
+from .models.logbert_model import LogBERTModel
+from .models.plelog_model import PLELogModel
+from .models.logformer_model import LogFormerModel
+from .models.loggpt_model import LogGPTModel
 from .evaluator import ModelEvaluator
 from .shap_explainer import SHAPExplainer
 
@@ -49,17 +54,18 @@ class AnomalyDetectionTrainer:
         base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.save_dir = save_dir or os.path.join(base, "saved_models")
         self._training_data_file = None
+        self._raw_windows = None   # list[pd.DataFrame] kept for BERT text input
         os.makedirs(self.save_dir, exist_ok=True)
 
     def _base_dir(self) -> str:
         return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-    def _resolve_data_path(self, data_path: str | None, force_synthetic: bool = False) -> tuple[str | None, bool]:
+    def _resolve_data_path(self, data_path: str | None, force_proxy_bgl: bool = False) -> tuple[str | None, bool]:
         """
-        Returns (path_or_none, use_synthetic).
+        Returns (path_or_none, use_proxy_bgl).
         Prefers explicit path, then ml_pipeline/data/BGL.log, then download script.
         """
-        if force_synthetic:
+        if force_proxy_bgl:
             return None, True
 
         base = self._base_dir()
@@ -80,8 +86,8 @@ class AnomalyDetectionTrainer:
             return dl, False
 
         logger.warning(
-            "No BGL.log found — training on synthetic data. "
-            "For realistic metrics, run: python scripts/download_bgl.py "
+            "No BGL.log found — training on a BGL-format proxy dataset. "
+            "For production-like metrics, run: python scripts/download_bgl.py "
             "then re-run training."
         )
         return None, True
@@ -127,11 +133,11 @@ class AnomalyDetectionTrainer:
     # -- Main entry point ------------------------------------------------------
 
     def run_full_pipeline(self, data_path: str = None,
-                          synthetic_samples: int = 80_000,
-                          force_synthetic: bool = False) -> dict:
+                          proxy_samples: int = 80_000,
+                          force_proxy_bgl: bool = False) -> dict:
         """
         Execute the complete training pipeline.
-        If data_path is None or file not found, synthetic BGL data is used.
+        If data_path is None or file not found, a BGL-format proxy corpus is generated.
         """
         t0 = time.time()
         logger.info("=" * 60)
@@ -142,18 +148,18 @@ class AnomalyDetectionTrainer:
         parser = DrainParser(depth=4, sim_threshold=0.4)
         loader = BGLDataLoader(drain_parser=parser)
 
-        resolved, use_synthetic = self._resolve_data_path(data_path, force_synthetic=force_synthetic)
+        resolved, use_proxy_bgl = self._resolve_data_path(data_path, force_proxy_bgl=force_proxy_bgl)
         self._training_data_file = resolved
 
-        if not use_synthetic and resolved:
+        if not use_proxy_bgl and resolved:
             logger.info("Loading real BGL dataset (sample up to 400k lines) …")
             df = loader.load_sample(resolved, n=400_000)
         else:
             logger.info(
-                "Generating synthetic BGL — metrics are illustrative; "
-                "use data/BGL.log for production-like scores."
+                "Generating BGL-format proxy logs — prefer data/BGL.log for "
+                "production-like evaluation metrics."
             )
-            df = loader.generate_synthetic_bgl(n_samples=synthetic_samples)
+            df = loader.generate_bgl_proxy(n_samples=proxy_samples)
 
         logger.info(f"Dataset: {len(df):,} entries, "
                     f"{df['is_anomaly'].sum():,} anomalies "
@@ -161,6 +167,7 @@ class AnomalyDetectionTrainer:
 
         # -- 2. Sliding windows -----------------------------------------------
         windows, y = loader.create_windows(df, window_size=WINDOW_SIZE, stride=STRIDE)
+        self._raw_windows = windows   # retained for BERT text-based training
         logger.info(f"Windows created: {len(windows):,} | "
                     f"Anomalous: {y.sum():,} ({y.mean()*100:.1f}%)")
 
@@ -189,14 +196,47 @@ class AnomalyDetectionTrainer:
         np.savez_compressed(holdout_npz, X_test=X_test, y_test=y_test)
         logger.info(f"Saved holdout evaluation set: {holdout_npz}")
 
-        # -- 5. SMOTE ---------------------------------------------------------
+        # -- 5. SMOTE (feature-based models only) ------------------------------
         X_train_res, y_train_res = self._apply_smote(X_train, y_train)
+
+        # -- 5b. Chronological window-text splits for BERT --------------------
+        n_win = len(windows)
+        n_test_w  = max(1, int(round(n_win * TEST_SIZE)))
+        n_test_w  = min(n_test_w, max(1, n_win - 20))
+        n_tv_w    = n_win - n_test_w
+        val_ratio = VAL_SIZE / (1.0 - TEST_SIZE)
+        n_val_w   = max(1, min(int(round(n_tv_w * val_ratio)), n_tv_w - 10))
+        t_end_w   = n_tv_w - n_val_w
+        win_train = windows[:t_end_w]
+        win_val   = windows[t_end_w:n_tv_w]
+        win_test  = windows[n_tv_w:]
+        X_text_train = self._windows_to_text(win_train)
+        X_text_val   = self._windows_to_text(win_val)
+        X_text_test  = self._windows_to_text(win_test)
+        y_text_train = y[:t_end_w]
+        y_text_val   = y[t_end_w:n_tv_w]
+        y_text_test  = y[n_tv_w:]
+
+        # Persist text-based holdout for BERT-Log API evaluation
+        text_holdout_npz = os.path.join(self.save_dir, "eval_holdout_text.npz")
+        np.savez_compressed(
+            text_holdout_npz,
+            X_text_test=np.array(X_text_test, dtype=object),
+            y_text_test=y_text_test,
+        )
+        logger.info(f"Saved BERT text holdout: {text_holdout_npz}")
 
         # -- 6. Train all models -----------------------------------------------
         results = self.train_all_models(
             X_train_res, X_val, X_test,
             y_train_res, y_val, y_test,
             feature_names=feature_names,
+            X_text_train=X_text_train,
+            X_text_val=X_text_val,
+            X_text_test=X_text_test,
+            y_text_train=y_text_train,
+            y_text_val=y_text_val,
+            y_text_test=y_text_test,
         )
 
         # -- 7. Select best + fallback if needed -------------------------------
@@ -225,8 +265,8 @@ class AnomalyDetectionTrainer:
             "best_f1": best_f1,
             "trained_at": datetime.utcnow().isoformat() + "Z",
             "data_source": (
-                "synthetic"
-                if use_synthetic
+                "bgl_proxy"
+                if use_proxy_bgl
                 else os.path.basename(self._training_data_file or "BGL.log")
             ),
             "eval_split": "chronological",
@@ -254,19 +294,22 @@ class AnomalyDetectionTrainer:
 
     def train_all_models(self, X_train, X_val, X_test,
                          y_train, y_val, y_test,
-                         feature_names=None) -> dict:
+                         feature_names=None,
+                         X_text_train=None, X_text_val=None, X_text_test=None,
+                         y_text_train=None, y_text_val=None, y_text_test=None) -> dict:
         evaluator = ModelEvaluator()
         results = {}
         feature_names = feature_names or [f"f{i}" for i in range(X_train.shape[1])]
 
-        models = [
+        # ---- Feature-based models (sklearn-compatible, work on X numpy array) ----
+        feature_models = [
             ("Logistic Regression", LogisticRegressionModel()),
             ("Random Forest",       RandomForestModel(n_estimators=200)),
             ("Isolation Forest",    IsolationForestModel(contamination=0.08)),
             ("LSTM Autoencoder",    LSTMAutoencoder(input_size=1)),
         ]
 
-        for name, model in models:
+        for name, model in feature_models:
             logger.info(f"\n-- Training: {name} --")
             try:
                 model.fit(X_train, y_train)
@@ -299,9 +342,56 @@ class AnomalyDetectionTrainer:
                     "detection_latency_ms": 0.0,
                     "model_type": "unknown", "error": str(e),
                 }
+
+        # ---- Text-based transformer/deep models (NeuralLog / BERT-Log paradigm) ----
+        if X_text_train is not None and X_text_test is not None:
+            text_models = [
+                # (display_name, model_instance, save_filename)
+                ("BERT-Log",   BERTLogModel(),   "bert_log"),
+                ("LogBERT",    LogBERTModel(),   "logbert"),
+                ("PLELog",     PLELogModel(),    "plelog"),
+                ("LogFormer",  LogFormerModel(), "logformer"),
+                ("LogGPT",     LogGPTModel(),    "loggpt"),
+            ]
+            for name, model, fname in text_models:
+                logger.info("\n-- Training: %s --", name)
+                try:
+                    model.fit(X_text_train, y_text_train)
+                    result = evaluator.evaluate(model, X_text_test, y_text_test, model.name)
+                    results[model.name] = result
+                    self._save_model(model, fname)
+                except Exception as e:
+                    logger.error("Failed to train %s: %s", name, e)
+                    results[name] = {
+                        "model_name": name, "f1_score": 0.0,
+                        "precision": 0.0, "recall": 0.0,
+                        "auc_roc": 0.5, "accuracy": 0.0,
+                        "false_positive_rate": 1.0, "false_negative_rate": 1.0,
+                        "detection_latency_ms": 0.0,
+                        "model_type": "transformer", "error": str(e),
+                    }
+
         return results
 
     # -- Helpers ---------------------------------------------------------------
+
+    @staticmethod
+    def _windows_to_text(windows: list) -> list:
+        """
+        Convert a list of window DataFrames to a list of strings for BERT input.
+
+        Concatenates the 'content' field of every log line in the window,
+        separated by ' [SEP] '. No Drain parsing needed — BERT's WordPiece
+        tokeniser handles raw log text directly (NeuralLog paradigm).
+        """
+        texts = []
+        for win_df in windows:
+            if hasattr(win_df, "iterrows"):
+                parts = win_df["content"].astype(str).tolist()
+            else:
+                parts = [str(win_df)]
+            texts.append(" [SEP] ".join(parts))
+        return texts
 
     def _apply_smote(self, X, y):
         try:
