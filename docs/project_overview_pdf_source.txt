@@ -1,0 +1,97 @@
+===1=== Log Anomaly Detection System — Technical Project Overview
+===0=== MSc Artificial Intelligence Dissertation
+===0=== Author: Subhan Jameel  |  Student ID: U2926092
+===0=== This document summarises the repository: architecture, the public BGL dataset from LogHub, the machine-learning training and evaluation pipeline, and the Ruby on Rails operator dashboard integrated with the Python inference service.
+
+===1=== 1. Executive summary
+===0=== The project is an end-to-end log anomaly detection system aimed at large-scale supercomputer logs. The primary data source is the Blue Gene/L (BGL) corpus published through LogHub: real operational logs from IBM Blue Gene/L systems at Lawrence Livermore National Laboratory (LLNL), with labels that separate normal lines from alert conditions. The Python tier implements Drain-based parsing, sliding-window feature engineering, training and comparison of four model families, chronological evaluation, SHAP explainability, and a REST API that serves predictions on new log windows. The Rails tier provides dashboards, log ingestion (paste or upload), persistence of alerts and log lines in PostgreSQL, and views for performance benchmarking and live monitoring.
+
+===1=== 2. Dataset: BGL (Blue Gene/L) via LogHub
+===0=== The BGL dataset is a standard research benchmark released with LogHub. It contains millions of log lines collected from production Blue Gene/L systems at LLNL. Each record includes temporal fields, node identifiers, RAS-related fields, component names, and message text; the leading label field encodes normal versus failure-related events so supervised models can be trained and evaluated with precision, recall, and related metrics.
+===0=== Published statistics for the full BGL release include on the order of 4.7 million messages with hundreds of thousands of anomalous lines and strong class imbalance—characteristic of real high-performance computing environments. The project includes automation (scripts/download_bgl.py) to obtain the archive or a published subset (such as BGL_2k.log) directly from LogHub-maintained sources.
+===0=== Using BGL ensures experiments are grounded in publicly documented, peer-reviewed operational telemetry rather than artificial toy data.
+
+===1=== 3. System architecture
+===0=== (A) ml_pipeline — Python stack (scikit-learn, PyTorch, Flask, Gunicorn). Handles data ingestion, Drain parsing, feature construction, model training, evaluation, explanation artifacts, serialization under saved_models/, and HTTP inference on port 5001.
+===0=== (B) log_anomaly_rails — Rails 8 application for HTTP UI, routing, ActiveRecord models, and integration with the ML service through MlApiService (ML_API_URL, typically http://localhost:5001 in development).
+===0=== docker-compose.yml orchestrates both services: the Rails container waits for the ML API health check and points ML_API_URL at the internal service hostname.
+
+===1=== 4. Machine-learning codebase (ml_pipeline)
+
+===2=== 4.1 scripts/download_bgl.py
+===0=== Downloads or refreshes BGL files from LogHub-associated URLs into ml_pipeline/data/. Ensures training and evaluation use the same public corpus referenced in academic literature.
+
+===2=== 4.2 scripts/train_pipeline.py
+===0=== Primary training driver: optional --data path to BGL.log (or subset), --samples to cap lines for large files, --save-dir for artifact location, and flags to control training configuration. Invokes AnomalyDetectionTrainer to run the full experiment and write checkpoints.
+
+===2=== 4.3 src/data_loader.py — BGLDataLoader
+===0=== Reads BGL log files, maps each line to structured fields (timestamp, node, component, content, label-derived anomaly flag), applies post-processing for severity and component taxonomies, and builds sliding windows over the temporal sequence so each window becomes one training or inference example.
+
+===2=== 4.4 src/drain_parser.py — DrainParser
+===0=== Implements the Drain algorithm (He et al., 2016) for log template extraction: variable tokens are abstracted so semantically equivalent messages share a template. This reduces vocabulary explosion and stabilises count- and TF-IDF-based features.
+
+===2=== 4.5 src/feature_engineering.py — FeatureEngineer
+===0=== Transforms each window into a numeric feature matrix: TF-IDF over textual content, severity aggregates, component indicators, timing and rate features, and related statistics. The fitted vectoriser and scaler are saved with the model so inference reproduces training inputs exactly.
+
+===2=== 4.6 src/models/
+===0=== LogisticRegressionModel — fast linear classifier baseline.
+===0=== RandomForestModel — non-linear ensemble with strong performance on tabular features; exposes probabilities for threshold tuning and SHAP tree explanations.
+===0=== IsolationForestModel — unsupervised detector treating rare windows as outliers.
+===0=== LSTMAutoencoder — recurrent deep model capturing sequential structure inside each window.
+===0=== Together these cover linear, tree ensemble, unsupervised, and deep learning approaches common in recent anomaly-detection surveys.
+
+===2=== 4.7 src/trainer.py — AnomalyDetectionTrainer
+===0=== End-to-end orchestration: locate dataset files under ml_pipeline/data/, load via BGLDataLoader, create windows, fit FeatureEngineer, split chronologically into train/validation/test to respect log ordering and limit leakage from overlapping windows, apply SMOTE on training data if configured, train all models, evaluate, optionally refine with a calibrated Random Forest if primary metrics sit below an internal quality gate, persist models and SHAP objects, save eval_holdout.npz for API-side evaluation of every checkpoint on the same hold-out matrix, and write training_metadata.json with best model name, scores, and configuration.
+
+===2=== 4.8 src/evaluator.py — ModelEvaluator
+===0=== Standard classification metrics: precision, recall, F1, accuracy, AUC-ROC when probability scores exist, false positive and false negative rates, and timing for batch prediction latency reporting.
+
+===2=== 4.9 src/shap_explainer.py — SHAPExplainer
+===0=== Model-agnostic and model-specific SHAP explainers (Lundberg & Lee, 2017) for interpretable feature attributions on tree and linear models, supporting dissertation discussion of transparency.
+
+===2=== 4.10 api/app.py — Flask application
+===0=== REST API: health, model listing, aggregate metrics, single and batch predict, explanation endpoint returning feature importance structures, and a simulate endpoint that emits BGL-structured lines for the monitoring view. At startup the service loads metadata, the feature pipeline, and the active checkpoint; when eval_holdout.npz is present it recomputes hold-out metrics so the dashboard reflects the same test split used during training. Optional Hugging Face Inference API calls (HF_TOKEN) can augment analysis with transformer-based semantic similarity when enabled.
+
+===2=== 4.11 ml_pipeline/saved_models/
+===0=== Serialized feature_engineer.pkl, model .pkl files, optional shap_*.pkl, eval_holdout.npz, and training_metadata.json. These artifacts are the output of training on BGL and are required for the API to serve consistent, reproducible scores.
+
+===1=== 5. Rails application (log_anomaly_rails)
+
+===2=== 5.1 config/routes.rb
+===0=== Maps URLs to controllers: dashboard home; analysis submit and results; alerts index, show, update, resolve, review, destroy; performance benchmarking page; monitor pages including a Server-Sent Events stream; Rails health endpoint.
+
+===2=== 5.2 app/services/ml_api_service.rb — MlApiService
+===0=== Encapsulates all JSON HTTP calls to the Flask service (health, metrics, models, predict, explain, simulate). Centralising URLs, timeouts, and JSON parsing keeps controllers thin and allows environment-specific API bases without code changes.
+
+===2=== 5.3 app/controllers/dashboard_controller.rb
+===0=== Fetches live metrics and model roster from the API, loads recent and historical AnomalyAlert counts, builds 24-hour activity charts and severity breakdowns for the landing dashboard.
+
+===2=== 5.4 app/controllers/analysis_controller.rb
+===0=== Validates user-supplied log text or file upload, forwards lines to the prediction and explanation endpoints, derives severity labels from scores, creates AnomalyAlert and LogEntry records for auditing, and stores the latest analysis in the session for the results page.
+
+===2=== 5.5 app/controllers/alerts_controller.rb
+===0=== Operator workflows: filter and paginate alerts, inspect detail with stored explanation payloads, transition status (resolved, reviewed), and remove stale records.
+
+===2=== 5.6 app/controllers/performance_controller.rb
+===0=== Presents comparative model metrics and BGL dataset facts (scale, imbalance, windowing parameters) aligned with LogHub documentation for the dissertation evaluation chapter.
+
+===2=== 5.7 app/controllers/monitor_controller.rb
+===0=== Drives the streaming monitor UI: opens an event-stream response and forwards server-generated log batches from the ML API line-by-line for progressive rendering suitable for operations-style dashboards.
+
+===2=== 5.8 app/models/
+===0=== LogEntry stores ingested lines and scores; AnomalyAlert stores incidents with model attribution and optional explanation JSON; ModelMetric supports persisted KPI history where used.
+
+===2=== 5.9 Database
+===0=== Migrations under db/migrate define PostgreSQL schemas for logs, alerts, and metrics; db/schema.rb reflects the deployed structure.
+
+===1=== 6. Methodology summary
+===0=== Chronological splitting aligns training and evaluation with real time order. SMOTE mitigates imbalance in the training fold. Multiple algorithms share identical features and test data for fair comparison. Model selection is driven by hold-out F1 with an optional refinement stage to meet a minimum quality bar before artifacts are exported.
+
+===1=== 7. Operation
+===0=== Acquire BGL via scripts/download_bgl.py, train with scripts/train_pipeline.py --data pointing at the downloaded file, start the API (Gunicorn in production), configure ML_API_URL for Rails, run database migrations, and start the Rails server or use docker-compose for an integrated stack.
+
+===1=== 8. Key dependencies
+===0=== Python: pandas, numpy, scikit-learn, imbalanced-learn, torch, shap, drain3, flask, joblib, requests, gunicorn, among others (see requirements.txt). Ruby: Rails and gems in Gemfile; PostgreSQL; Node tooling per package.json for assets.
+
+===1=== 9. Conclusion
+===0=== The system connects a widely cited public supercomputer log corpus to a full ML lifecycle—parsing, features, multi-model training, quantitative evaluation, explainability, and a Rails front end—suitable for dissertation presentation as a complete anomaly-detection research platform.
