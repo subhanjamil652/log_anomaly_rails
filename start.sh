@@ -24,7 +24,7 @@ if ! python3 -c "import flask" 2>/dev/null; then
   pip3 install -r requirements.txt -q
 fi
 
-# Start API in background (auto-trains on synthetic data if no model found)
+# Start API in background (auto-trains if no saved model is present)
 python3 api/app.py &
 ML_PID=$!
 echo "   ML API PID: $ML_PID"

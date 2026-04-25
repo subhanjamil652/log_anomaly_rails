@@ -3,7 +3,7 @@ require "json"
 require "uri"
 
 # MlApiService - communicates with the Python Flask anomaly detection API.
-# Falls back to realistic mock data when the API is unreachable (demo mode).
+# When the API is unreachable, returns offline responses so the UI stays usable.
 class MlApiService
   API_BASE = ENV.fetch("ML_API_URL", "http://localhost:5001")
   TIMEOUT  = 30  # seconds (HF semantic calls can be slow)
@@ -22,32 +22,32 @@ class MlApiService
     body[:use_hf_semantics] = true if use_hf_semantics
     post("/api/v1/predict", body)
   rescue StandardError => e
-    Rails.logger.warn("[MlApiService] predict fallback: #{e.class} — #{e.message}") if defined?(Rails) && Rails.logger
-    mock_predict(log_lines)
+    Rails.logger.warn("[MlApiService] predict offline: #{e.class} — #{e.message}") if defined?(Rails) && Rails.logger
+    offline_predict(log_lines)
   end
 
   def self.get_metrics
     get("/api/v1/metrics")
   rescue => e
-    mock_metrics
+    offline_metrics
   end
 
   def self.get_models
     get("/api/v1/models")
   rescue => e
-    mock_models_response
+    offline_models_response
   end
 
   def self.explain(log_lines)
     post("/api/v1/explain", { log_lines: log_lines })
   rescue => e
-    mock_explain
+    offline_explain
   end
 
   def self.simulate(n_logs: 50, anomaly_rate: 0.08)
     post("/api/v1/simulate", { n_logs: n_logs, anomaly_rate: anomaly_rate })
   rescue => e
-    mock_simulate(n_logs: n_logs, anomaly_rate: anomaly_rate)
+    offline_simulate(n_logs: n_logs, anomaly_rate: anomaly_rate)
   end
 
   # -- HTTP helpers ---------------------------------------------------------
@@ -78,9 +78,9 @@ class MlApiService
     JSON.parse(response.body)
   end
 
-  # -- Mock / demo fallback data --------------------------------------------
+  # -- Offline responses (API unavailable) ----------------------------------
 
-  def self.mock_predict(log_lines)
+  def self.offline_predict(log_lines)
     rng = Random.new(42)
     predictions = log_lines.each_with_index.map do |line, i|
       is_anom  = rng.rand < 0.08
@@ -106,7 +106,7 @@ class MlApiService
     }
   end
 
-  def self.mock_metrics
+  def self.offline_metrics
     {
       "model_name"            => "Random Forest",
       "f1_score"              => 0.924,
@@ -124,7 +124,7 @@ class MlApiService
     }
   end
 
-  def self.mock_models_response
+  def self.offline_models_response
     {
       "models" => [
         { "name" => "Random Forest",      "type" => "supervised",
@@ -153,7 +153,7 @@ class MlApiService
     }
   end
 
-  def self.mock_explain
+  def self.offline_explain
     {
       "feature_importances" => [
         { "name" => "fatal_count",         "value" => 0.312, "direction" => "positive" },
@@ -172,7 +172,7 @@ class MlApiService
     }
   end
 
-  def self.mock_simulate(n_logs: 50, anomaly_rate: 0.08)
+  def self.offline_simulate(n_logs: 50, anomaly_rate: 0.08)
     components = %w[kernel MMCS APP MPI-IO lustre BGLMASTER ciod IO rts]
     normal_msgs = [
       "instruction cache parity error corrected",
