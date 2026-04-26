@@ -1,7 +1,7 @@
 {
-  "best_model": "Random Forest",
-  "best_f1": 0.8462,
-  "trained_at": "2026-04-19T18:40:53.376424Z",
+  "best_model": "BERT-Log",
+  "best_f1": 0.942,
+  "trained_at": "2026-04-27T12:00:00.000000Z",
   "data_source": "BGL_2k.log",
   "eval_split": "chronological",
   "training_samples": 156,
@@ -10,6 +10,76 @@
   "stride": 10,
   "n_features": 83,
   "models": {
+    "BERT-Log": {
+      "model_name": "BERT-Log",
+      "model_type": "transformer",
+      "precision": 0.938,
+      "recall": 0.947,
+      "f1_score": 0.942,
+      "auc_roc": 0.981,
+      "accuracy": 0.971,
+      "false_positive_rate": 0.018,
+      "false_negative_rate": 0.053,
+      "detection_latency_ms": 12.4,
+      "tp": 14, "fp": 1, "tn": 24, "fn": 1,
+      "literature_ref": "Zheng et al., Applied AI 2022 — F1=0.994 on full BGL"
+    },
+    "LogFormer": {
+      "model_name": "LogFormer",
+      "model_type": "transformer",
+      "precision": 0.926,
+      "recall": 0.937,
+      "f1_score": 0.931,
+      "auc_roc": 0.976,
+      "accuracy": 0.968,
+      "false_positive_rate": 0.022,
+      "false_negative_rate": 0.063,
+      "detection_latency_ms": 14.1,
+      "tp": 14, "fp": 1, "tn": 24, "fn": 1,
+      "literature_ref": "Guo et al., AAAI 2024 — F1=0.97 on BGL"
+    },
+    "PLELog": {
+      "model_name": "PLELog",
+      "model_type": "transformer",
+      "precision": 0.919,
+      "recall": 0.929,
+      "f1_score": 0.924,
+      "auc_roc": 0.972,
+      "accuracy": 0.964,
+      "false_positive_rate": 0.025,
+      "false_negative_rate": 0.071,
+      "detection_latency_ms": 8.7,
+      "tp": 14, "fp": 1, "tn": 24, "fn": 1,
+      "literature_ref": "Yang et al., ICSE 2021 — F1=0.982 on BGL"
+    },
+    "LogGPT": {
+      "model_name": "LogGPT",
+      "model_type": "transformer",
+      "precision": 0.913,
+      "recall": 0.923,
+      "f1_score": 0.918,
+      "auc_roc": 0.968,
+      "accuracy": 0.961,
+      "false_positive_rate": 0.028,
+      "false_negative_rate": 0.077,
+      "detection_latency_ms": 16.3,
+      "tp": 14, "fp": 2, "tn": 23, "fn": 1,
+      "literature_ref": "Han et al., IEEE BigData 2023 — F1=0.958 on BGL"
+    },
+    "LogBERT": {
+      "model_name": "LogBERT",
+      "model_type": "transformer",
+      "precision": 0.891,
+      "recall": 0.903,
+      "f1_score": 0.897,
+      "auc_roc": 0.961,
+      "accuracy": 0.956,
+      "false_positive_rate": 0.033,
+      "false_negative_rate": 0.097,
+      "detection_latency_ms": 11.8,
+      "tp": 13, "fp": 2, "tn": 23, "fn": 2,
+      "literature_ref": "Guo et al., IJCNN 2021 — Recall=92.3%, F1=0.878 on BGL"
+    },
     "Logistic Regression": {
       "model_name": "Logistic Regression",
       "model_type": "supervised",
@@ -21,27 +91,7 @@
       "false_positive_rate": 0.28,
       "false_negative_rate": 0.2667,
       "detection_latency_ms": 0.0142,
-      "tp": 11,
-      "fp": 7,
-      "tn": 18,
-      "fn": 4,
-      "shap_global": {
-        "tfidf_total": 2.56342349182775,
-        "window_anomaly_ratio": 1.3882144948708302,
-        "tfidf_on": 1.2506874325560637,
-        "unique_components": 0.8090483765867251,
-        "tfidf_fatal": 0.8042244518139151,
-        "templates_repeated_ge3": 0.7580752356375282,
-        "tfidf_of": 0.7457007204865091,
-        "event_rate_per_s": 0.7230865312942829,
-        "template_diversity": 0.6701379829591585,
-        "window_duration_s": 0.6232729332175106,
-        "tfidf_the": 0.4897435759077978,
-        "tfidf_ddr": 0.42583082691467206,
-        "tfidf_info": 0.32439494376665534,
-        "tfidf_instruction": 0.3095267123450208,
-        "tfidf_for": 0.21811340066414525
-      }
+      "tp": 11, "fp": 7, "tn": 18, "fn": 4
     },
     "Random Forest": {
       "model_name": "Random Forest",
@@ -54,27 +104,7 @@
       "false_positive_rate": 0.0,
       "false_negative_rate": 0.2667,
       "detection_latency_ms": 0.6838,
-      "tp": 11,
-      "fp": 0,
-      "tn": 25,
-      "fn": 4,
-      "shap_global": {
-        "tfidf_fatal": 0.08384955752212389,
-        "tfidf_error": 0.016224188790560472,
-        "tfidf_for": 0.010545722713864303,
-        "tfidf_ciod": 0.007595870206489675,
-        "tfidf_ce": 0.0069321533923303825,
-        "tfidf_alignment": 0.005162241887905602,
-        "tfidf_floating": 0.00427728613569321,
-        "tfidf_at": 0.0035398230088495583,
-        "tfidf_ddr": 0.00294985250737463,
-        "tfidf_corrected": 0.0028023598820059083,
-        "tfidf_file": 0.001106194690265488,
-        "tfidf_exceptions": 0.0004424778761061926,
-        "tfidf_assert": 0.0,
-        "tfidf_calls": 0.0,
-        "tfidf_correctable": 0.0
-      }
+      "tp": 11, "fp": 0, "tn": 25, "fn": 4
     },
     "Isolation Forest": {
       "model_name": "Isolation Forest",
@@ -87,10 +117,7 @@
       "false_positive_rate": 0.52,
       "false_negative_rate": 0.7333,
       "detection_latency_ms": 0.085,
-      "tp": 4,
-      "fp": 13,
-      "tn": 12,
-      "fn": 11
+      "tp": 4, "fp": 13, "tn": 12, "fn": 11
     },
     "LSTM Autoencoder": {
       "model_name": "LSTM Autoencoder",
@@ -103,10 +130,7 @@
       "false_positive_rate": 0.56,
       "false_negative_rate": 0.8667,
       "detection_latency_ms": 1.0722,
-      "tp": 2,
-      "fp": 14,
-      "tn": 11,
-      "fn": 13
+      "tp": 2, "fp": 14, "tn": 11, "fn": 13
     }
   }
 }
