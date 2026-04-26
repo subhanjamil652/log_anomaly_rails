@@ -30,7 +30,7 @@ class AnalysisController < ApplicationController
         is_anomaly:        true,
         confidence_score:  pred["confidence"].to_f,
         anomaly_score:     score,
-        alert_model_name:  pred["model"] || "Random Forest",
+        alert_model_name:  pred["model"] || "BERT-Log",
         feature_importances: (explain["feature_importances"] || []).to_json,
         detected_at:       Time.current,
         status:            "new",
