@@ -6,7 +6,7 @@
       <h5 class="fw-semibold mb-1"><i class="bi bi-search me-2" style="color:#3b82f6;"></i>Analyse Log Data</h5>
       <p style="font-size:0.82rem;color:var(--text-secondary);margin-bottom:1.5rem;">
         Paste BGL supercomputer log lines or upload a log file. The system parses each line using the
-        Drain algorithm, extracts sliding-window feature vectors, and runs anomaly detection using the trained Random Forest model.
+        Drain algorithm, extracts sliding-window feature vectors, and runs anomaly detection using the trained BERT-Log transformer model.
       </p>
 
       <%= form_tag(analysis_path, method: :post, multipart: true, id: "analysis-form") do %>
@@ -78,7 +78,7 @@ FATAL 1117906684 2005.06.04 10:51:24.913855 R23-M0-N09-C0-J01 RAS KERNEL KERNEL 
 
       <div id="loading" class="text-center py-4" style="display:none;">
         <div class="spinner-border" style="color:#3b82f6;width:2rem;height:2rem;" role="status"></div>
-        <p class="mt-2" style="color:var(--text-secondary);font-size:0.85rem;">Parsing logs with Drain · Extracting features · Running Random Forest inference ...</p>
+        <p class="mt-2" style="color:var(--text-secondary);font-size:0.85rem;">Parsing logs with Drain · Tokenising with WordPiece · Running BERT-Log inference ...</p>
       </div>
     </div>
   </div>
@@ -90,7 +90,7 @@ FATAL 1117906684 2005.06.04 10:51:24.913855 R23-M0-N09-C0-J01 RAS KERNEL KERNEL 
         <li>Log lines are parsed with the <strong style="color:var(--text-primary);">Drain algorithm</strong></li>
         <li>Structured into <strong style="color:var(--text-primary);">sliding windows</strong> of 20 events</li>
         <li>Feature extraction: TF-IDF, severity stats, component encoding</li>
-        <li><strong style="color:var(--text-primary);">Random Forest</strong> classifies each window</li>
+        <li><strong style="color:var(--text-primary);">BERT-Log</strong> classifies each window via transformer attention</li>
         <li><strong style="color:var(--text-primary);">SHAP</strong> values explain each prediction</li>
       </ol>
     </div>
