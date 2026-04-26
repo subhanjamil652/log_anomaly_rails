@@ -162,7 +162,7 @@ def load_models():
     if os.path.exists(meta_path):
         with open(meta_path) as f:
             _metadata = json.load(f)
-        _active_model_name = _metadata.get("best_model", "Random Forest")
+        _active_model_name = _metadata.get("best_model", "BERT-Log")
 
     # Load best model — prefer transformer models, then RF
     _text_loaders = {
