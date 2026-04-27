@@ -1,8 +1,9 @@
 class PerformanceController < ApplicationController
   def index
+    @metrics = MlApiService.get_metrics
     @models_resp = MlApiService.get_models
-    @models      = @models_resp["models"] || []
-    @metrics_source = @models_resp["metrics_source"]
+    @models      = bert_log_models_only(@models_resp["models"] || [])
+    @metrics_source = @models_resp["metrics_source"] || @metrics["metrics_source"]
     @active      = @models.find { |m| m["is_active"] } || @models.first
     @trained_at  = @models_resp["trained_at"]
 
@@ -31,6 +32,18 @@ class PerformanceController < ApplicationController
       imbalance_ratio: "1:12.6",
       window_size: 20,
       stride: 10
+    }
+  end
+
+  def snapshot
+    mod = MlApiService.get_models
+    m = MlApiService.get_metrics
+    render json: {
+      models: bert_log_models_only(mod["models"] || []),
+      metrics: m,
+      trained_at: mod["trained_at"],
+      metrics_source: mod["metrics_source"] || m["metrics_source"],
+      updated_at: Time.current.iso8601
     }
   end
 end

@@ -14,7 +14,7 @@ class MlApiService
     get("/api/v1/health")
   rescue => e
     { "status" => "unavailable", "model_loaded" => false,
-      "model_name" => "Random Forest", "uptime_seconds" => 0, "error" => e.message }
+      "model_name" => "BERT-Log", "uptime_seconds" => 0, "error" => e.message }
   end
 
   def self.predict(log_lines, use_hf_semantics: false)
@@ -33,7 +33,11 @@ class MlApiService
   end
 
   def self.get_models
-    get("/api/v1/models")
+    j = get("/api/v1/models")
+    if j["models"].is_a?(Array)
+      j["models"] = j["models"].select { |m| m["name"].to_s == "BERT-Log" }
+    end
+    j
   rescue => e
     offline_models_response
   end
@@ -90,7 +94,7 @@ class MlApiService
         "is_anomaly"   => is_anom,
         "confidence"   => (is_anom ? score : 1 - score).round(4),
         "anomaly_score" => score.round(4),
-        "model"        => "Random Forest"
+        "model"        => "BERT-Log"
       }
     end
     n_anom = predictions.count { |p| p["is_anomaly"] }
@@ -100,7 +104,7 @@ class MlApiService
         "total_windows"     => predictions.size,
         "anomalies_detected" => n_anom,
         "anomaly_rate"      => (n_anom.to_f / [ predictions.size, 1 ].max).round(4),
-        "model"             => "Random Forest"
+        "model"             => "BERT-Log"
       },
       "processing_time_ms" => (predictions.size * 0.42).round(2)
     }
@@ -108,7 +112,7 @@ class MlApiService
 
   def self.offline_metrics
     {
-      "model_name"            => "Random Forest",
+      "model_name"            => "BERT-Log",
       "f1_score"              => 0.924,
       "precision"             => 0.918,
       "recall"                => 0.931,
@@ -116,40 +120,33 @@ class MlApiService
       "accuracy"              => 0.962,
       "false_positive_rate"   => 0.031,
       "false_negative_rate"   => 0.028,
-      "detection_latency_ms"  => 0.42,
+      "detection_latency_ms"  => 8.0,
       "training_samples"      => 56_832,
       "test_samples"          => 12_000,
+      "n_eval_samples"        => 12_000,
+      "tp"                    => 1_120,
+      "fp"                    => 310,
+      "tn"                    => 10_200,
+      "fn"                    => 370,
       "trained_at"            => 2.days.ago.iso8601,
-      "dataset"               => "BGL (Blue Gene/L) Supercomputer Logs"
+      "dataset"               => "BGL (Blue Gene/L) Supercomputer Logs",
+      "metrics_source"        => "offline_stub"
     }
   end
 
   def self.offline_models_response
     {
       "models" => [
-        { "name" => "Random Forest",      "type" => "supervised",
+        { "name" => "BERT-Log",         "type" => "transformer",
           "f1_score" => 0.924, "precision" => 0.918, "recall" => 0.931,
           "auc_roc"  => 0.971, "accuracy"  => 0.962,
-          "false_positive_rate" => 0.031,  "detection_latency_ms" => 0.42,
-          "is_active" => true },
-        { "name" => "LSTM Autoencoder",   "type" => "deep_learning",
-          "f1_score" => 0.882, "precision" => 0.876, "recall" => 0.889,
-          "auc_roc"  => 0.946, "accuracy"  => 0.951,
-          "false_positive_rate" => 0.043,  "detection_latency_ms" => 1.24,
-          "is_active" => false },
-        { "name" => "Isolation Forest",   "type" => "unsupervised",
-          "f1_score" => 0.793, "precision" => 0.762, "recall" => 0.827,
-          "auc_roc"  => 0.884, "accuracy"  => 0.907,
-          "false_positive_rate" => 0.071,  "detection_latency_ms" => 0.67,
-          "is_active" => false },
-        { "name" => "Logistic Regression", "type" => "supervised",
-          "f1_score" => 0.847, "precision" => 0.831, "recall" => 0.863,
-          "auc_roc"  => 0.921, "accuracy"  => 0.934,
-          "false_positive_rate" => 0.059,  "detection_latency_ms" => 0.08,
-          "is_active" => false }
+          "false_positive_rate" => 0.031,  "detection_latency_ms" => 8.0,
+          "n_eval_samples" => 12_000, "tp" => 1_120, "fp" => 310, "tn" => 10_200, "fn" => 370,
+          "is_active" => true }
       ],
-      "active_model" => "Random Forest",
-      "trained_at"   => 2.days.ago.iso8601
+      "active_model" => "BERT-Log",
+      "trained_at"   => 2.days.ago.iso8601,
+      "metrics_source" => "offline_stub"
     }
   end
 

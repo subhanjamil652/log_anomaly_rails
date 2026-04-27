@@ -2,6 +2,7 @@ Rails.application.routes.draw do
   root "dashboard#index"
 
   get  "dashboard", to: "dashboard#index", as: :dashboard
+  get  "dashboard/snapshot", to: "dashboard#snapshot"
 
   get  "analysis",       to: "analysis#index"
   post "analysis",       to: "analysis#create"
@@ -15,6 +16,7 @@ Rails.application.routes.draw do
   delete "alerts/:id",   to: "alerts#destroy"
 
   get  "performance",    to: "performance#index", as: :performance
+  get  "performance/snapshot", to: "performance#snapshot"
 
   get  "monitor",        to: "monitor#index",   as: :monitor
   get  "monitor/stream", to: "monitor#stream",  as: :monitor_stream

@@ -16,6 +16,11 @@
     <% if @metrics_source == "training_metadata" %> — run ML training to generate <code style="font-size:0.75rem;">eval_holdout.npz</code> for live holdout scores.<% end %>
   </div>
 <% end %>
+<% if @metrics["metric_note"].present? %>
+  <div class="mb-3 p-2 rounded" style="font-size:0.78rem;color:#fde68a;background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.35);">
+    <i class="bi bi-info-circle me-1"></i><%= @metrics["metric_note"] %>
+  </div>
+<% end %>
 
 <!-- Stat Cards Row -->
 <div class="row g-3 mb-4">
@@ -25,7 +30,7 @@
         <i class="bi bi-exclamation-triangle-fill" style="color:#ef4444;"></i>
       </div>
       <div>
-        <div class="stat-value"><%= @today_alerts %></div>
+        <div class="stat-value" id="dash-stat-today-alerts"><%= @today_alerts %></div>
         <div class="stat-label">Anomalies Today</div>
       </div>
     </div>
@@ -33,22 +38,25 @@
   <div class="col-md-3">
     <div class="stat-card">
       <div class="stat-icon" style="background:rgba(59,130,246,0.15);">
-        <i class="bi bi-graph-up" style="color:#3b82f6;"></i>
+        <i class="bi bi-file-text" style="color:#3b82f6;"></i>
       </div>
       <div>
-        <div class="stat-value"><%= (@metrics["f1_score"].to_f * 100).round(1) %>%</div>
-        <div class="stat-label">F1 (active model, holdout)</div>
+        <div class="stat-value" id="dash-stat-log-lines"><%= @log_lines_today %></div>
+        <div class="stat-label">Log lines analysed today</div>
+        <div class="stat-hint" style="font-size:0.65rem;color:var(--text-secondary);margin-top:0.2rem;">Auto-refreshing every 15s</div>
       </div>
     </div>
   </div>
   <div class="col-md-3">
     <div class="stat-card">
       <div class="stat-icon" style="background:rgba(34,197,94,0.15);">
-        <i class="bi bi-cpu" style="color:#22c55e;"></i>
+        <i class="bi bi-graph-up" style="color:#22c55e;"></i>
       </div>
       <div>
-        <div class="stat-value" style="font-size:1.1rem;"><%= @active_model&.dig("name") || "BERT-Log" %></div>
-        <div class="stat-label">Active Model</div>
+        <% f1h = @metrics["f1_score"] %>
+        <div class="stat-value" id="dash-stat-f1" style="font-size:1.35rem;"><%= f1h.nil? ? "—" : ml_rate(f1h, precision: 3) %></div>
+        <div class="stat-label">F1 score (holdout, 0–1)</div>
+        <div class="stat-hint" style="font-size:0.65rem;color:var(--text-secondary);margin-top:0.2rem;"><%= f1h.nil? ? "BERT-Log" : ml_pct(f1h, precision: 2) %> · n=<%= @metrics["n_eval_samples"] || @metrics["test_samples"].to_i %></div>
       </div>
     </div>
   </div>
@@ -58,8 +66,9 @@
         <i class="bi bi-shield-check" style="color:#f59e0b;"></i>
       </div>
       <div>
-        <div class="stat-value"><%= (@metrics["false_positive_rate"].to_f * 100).round(1) %>%</div>
-        <div class="stat-label">FPR (holdout)</div>
+        <div class="stat-value" id="dash-stat-fpr"><%= @metrics["false_positive_rate"].nil? ? "—" : ml_rate(@metrics["false_positive_rate"], precision: 3) %></div>
+        <div class="stat-label">FPR (0–1, holdout)</div>
+        <div class="stat-hint" style="font-size:0.65rem;color:var(--text-secondary);margin-top:0.2rem;">Auto-refreshing</div>
       </div>
     </div>
   </div>
@@ -140,12 +149,12 @@
     <% stats = [
          [@metrics["test_samples"].to_i.positive? ? number_with_delimiter(@metrics["test_samples"].to_i) : "—","Holdout test windows","#3b82f6"],
          [@metrics["training_samples"].to_i.positive? ? number_with_delimiter(@metrics["training_samples"].to_i) : "—","Training windows","#64748b"],
-         ["#{(@metrics['auc_roc'].to_f*100).round(1)}%","AUC-ROC (active, holdout)","#22c55e"],
+         ["<span id=\"dash-stat-auc\">#{ml_rate(@metrics['auc_roc'], precision: 3)}</span>","AUC-ROC (0–1, holdout)","#22c55e"],
          ["#{@metrics['detection_latency_ms']&.to_f&.round(3) || "—"}ms","Latency / window (est.)","#f59e0b"],
          ["Drain","Log Parser","#a855f7"],["SHAP","Explainability","#06b6d4"]] %>
     <% stats.each do |val, label, color| %>
       <div class="col">
-        <div style="font-size:1.4rem;font-weight:700;color:<%= color %>;"><%= val %></div>
+        <div style="font-size:1.4rem;font-weight:700;color:<%= color %>;"><%= raw val %></div>
         <div style="font-size:0.75rem;color:var(--text-secondary);margin-top:0.2rem;"><%= label %></div>
       </div>
     <% end %>
@@ -155,7 +164,7 @@
 <script>
 const models = <%= raw @models.to_json %>;
 
-new Chart(document.getElementById('timelineChart'), {
+const dashTimelineChart = new Chart(document.getElementById('timelineChart'), {
   type: 'line',
   data: {
     labels: <%= raw @hourly_labels.to_json %>,
@@ -170,7 +179,7 @@ new Chart(document.getElementById('timelineChart'), {
                y: { ticks: { color: '#64748b' }, grid: { color: 'rgba(255,255,255,0.04)' } } } }
 });
 
-new Chart(document.getElementById('severityChart'), {
+const dashSeverityChart = new Chart(document.getElementById('severityChart'), {
   type: 'doughnut',
   data: {
     labels: ['Critical','High','Medium','Low'],
@@ -181,7 +190,7 @@ new Chart(document.getElementById('severityChart'), {
     plugins: { legend: { position: 'bottom', labels: { color: '#94a3b8', font: { size: 10 } } } } }
 });
 
-new Chart(document.getElementById('modelCompareChart'), {
+const dashModelChart = new Chart(document.getElementById('modelCompareChart'), {
   type: 'bar',
   data: {
     labels: models.map(m => m.name.replace(' ', '\n')),
@@ -194,8 +203,45 @@ new Chart(document.getElementById('modelCompareChart'), {
   options: {
     responsive: true,
     scales: { x: { ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: 'rgba(255,255,255,0.04)' } },
-               y: { min: 0.6, max: 1, ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.04)' } } },
+               y: { min: 0, max: 1, ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.04)' } } },
     plugins: { legend: { labels: { color: '#94a3b8', font: { size: 10 } } } }
   }
 });
+
+(function dashboardPoll() {
+  const path = "/dashboard/snapshot";
+  async function tick() {
+    try {
+      const r = await fetch(path, { headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' } });
+      if (!r.ok) return;
+      const j = await r.json();
+      const el = (id) => document.getElementById(id);
+      if (j.today_alerts != null) el('dash-stat-today-alerts') && (el('dash-stat-today-alerts').textContent = j.today_alerts);
+      if (j.log_lines_today != null) el('dash-stat-log-lines') && (el('dash-stat-log-lines').textContent = j.log_lines_today);
+      const m = j.metrics || {};
+      const r3 = (x) => (Number(x)).toFixed(3);
+      if (m.f1_score != null) el('dash-stat-f1') && (el('dash-stat-f1').textContent = r3(m.f1_score));
+      if (m.false_positive_rate != null) el('dash-stat-fpr') && (el('dash-stat-fpr').textContent = r3(m.false_positive_rate));
+      const aucEl = document.getElementById('dash-stat-auc');
+      if (aucEl && m.auc_roc != null) aucEl.textContent = r3(m.auc_roc);
+      if (j.hourly_counts && dashTimelineChart) {
+        dashTimelineChart.data.datasets[0].data = j.hourly_counts;
+        dashTimelineChart.update('none');
+      }
+      if (j.severity && dashSeverityChart) {
+        const s = j.severity;
+        dashSeverityChart.data.datasets[0].data = [s.critical, s.high, s.medium, s.low];
+        dashSeverityChart.update('none');
+      }
+      if (j.models && j.models[0] && dashModelChart) {
+        const mm = j.models[0];
+        dashModelChart.data.datasets[0].data = [mm.f1_score];
+        dashModelChart.data.datasets[1].data = [mm.precision];
+        dashModelChart.data.datasets[2].data = [mm.recall];
+        dashModelChart.update('none');
+      }
+    } catch (e) { /* offline */ }
+  }
+  setInterval(tick, 15000);
+})();
 </script>

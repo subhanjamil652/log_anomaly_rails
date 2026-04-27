@@ -1,10 +1,26 @@
 <% content_for :page_title, "Model Performance" %>
 
+<% if @metrics["metric_note"].present? %>
+  <div class="mb-3 p-2 rounded" id="perf-metric-note-banner" style="font-size:0.8rem;color:#fde68a;background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.35);">
+    <i class="bi bi-info-circle me-1"></i><span id="perf-metric-note-text"><%= @metrics["metric_note"] %></span>
+    <% if @metrics["n_eval_samples"].present? %> · n=<span id="perf-n-samples"><%= @metrics["n_eval_samples"] %></span><% end %>
+  </div>
+<% end %>
+
+<div class="card-dark mb-4" style="border:1px solid var(--border-color);">
+  <h6 class="fw-semibold mb-2" style="font-size:0.88rem;"><i class="bi bi-journal-text me-2" style="color:#94a3b8;"></i>How to read these metrics (thesis &amp; viva)</h6>
+  <ul class="mb-0 ps-3" style="font-size:0.78rem;color:var(--text-secondary);line-height:1.55;">
+    <li><strong style="color:var(--text-primary);">Accuracy / F1 = 1.000</strong> on this page means: on the <strong>saved holdout</strong> test windows, the model&rsquo;s decision rule had no (or no harmful) errors. It is <em>not</em> a claim that the system is error-free on the full BGL dataset.</li>
+    <li>Check <strong style="color:var(--text-primary);">n</strong> and the <strong>confusion counts</strong> below. If n is small, a perfect score is expected to happen sometimes — report TP/FP/TN/FN in your write-up.</li>
+    <li>Full write-up: <code style="font-size:0.7rem;">log_anomaly_rails/docs/metrics-interpretation.md</code></li>
+  </ul>
+</div>
+
 <% if @metrics_source.present? %>
   <p class="mb-3" style="font-size:0.8rem;color:var(--text-secondary);">
     <% if @metrics_source == "holdout_eval" %>
       <i class="bi bi-check2-circle me-1" style="color:#22c55e;"></i>
-      Figures below are <strong style="color:var(--text-primary);">recomputed on the saved holdout split</strong> (same test set for every checkpoint). “Best” = highest F1 on that split.
+      Figures below are <strong style="color:var(--text-primary);">recomputed on the saved holdout split</strong> (same test set for every run). <strong style="color:var(--text-primary);">F1, precision, recall, and accuracy</strong> are from the model&rsquo;s fixed decision rule (same as live <code style="font-size:0.75rem;">/predict</code>); AUC-ROC is from anomaly scores. Very small holdouts can look &ldquo;too perfect&rdquo;—see the note above. If a model shows 0, weights may be degenerate: re-run <code style="font-size:0.75rem;">python scripts/train_pipeline.py</code> in <code style="font-size:0.75rem;">ml_pipeline</code> to refresh.
     <% else %>
       <i class="bi bi-exclamation-triangle me-1" style="color:#f59e0b;"></i>
       Metrics source: <code style="font-size:0.75rem;"><%= @metrics_source %></code> — run <code style="font-size:0.75rem;">python scripts/train_pipeline.py</code> in <code style="font-size:0.75rem;">ml_pipeline</code> to refresh.
@@ -20,11 +36,12 @@
     <div>
       <div style="font-size:0.75rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.08em;">Best Performing Model</div>
       <div style="font-size:1.2rem;font-weight:700;color:var(--text-primary);"><%= @best["name"] %></div>
-      <div style="font-size:0.8rem;color:var(--text-secondary);">
-        F1: <strong style="color:#22c55e;"><%= @best["f1_score"] %></strong> &nbsp;|&nbsp;
-        Precision: <strong style="color:#3b82f6;"><%= @best["precision"] %></strong> &nbsp;|&nbsp;
-        Recall: <strong style="color:#a855f7;"><%= @best["recall"] %></strong> &nbsp;|&nbsp;
-        AUC-ROC: <strong style="color:#f59e0b;"><%= @best["auc_roc"] %></strong>
+      <div style="font-size:0.8rem;color:var(--text-secondary);" id="perf-best-kpis">
+        F1: <strong id="perf-best-f1" style="color:#22c55e;"><%= ml_rate(@best["f1_score"], precision: 3) %></strong> &nbsp;|&nbsp;
+        Precision: <strong id="perf-best-prec" style="color:#3b82f6;"><%= ml_rate(@best["precision"], precision: 3) %></strong> &nbsp;|&nbsp;
+        Recall: <strong id="perf-best-rec" style="color:#a855f7;"><%= ml_rate(@best["recall"], precision: 3) %></strong> &nbsp;|&nbsp;
+        AUC-ROC: <strong id="perf-best-auc" style="color:#f59e0b;"><%= ml_rate(@best["auc_roc"], precision: 3) %></strong>
+        <% if @metrics["n_eval_samples"].present? %> <span class="text-secondary" style="font-size:0.72rem;">(n=<%= @metrics["n_eval_samples"] %>)</span><% end %>
       </div>
     </div>
     <% if @trained_at %>
@@ -40,7 +57,7 @@
 
 <!-- Model metrics table -->
 <div class="card-dark mb-4">
-  <h6 class="fw-semibold mb-3"><i class="bi bi-table me-2" style="color:#3b82f6;"></i>All Model Metrics</h6>
+  <h6 class="fw-semibold mb-3"><i class="bi bi-table me-2" style="color:#3b82f6;"></i>BERT-Log — holdout metrics <span style="font-size:0.7rem;font-weight:400;color:var(--text-secondary);">(auto-refresh 20s)</span></h6>
   <div style="overflow-x:auto;">
     <table class="table table-dark-custom mb-0">
       <thead>
@@ -51,21 +68,21 @@
       </thead>
       <tbody>
         <% @models.each do |m| %>
-          <tr class="<%= m['is_active'] ? '' : '' %>">
+          <tr id="perf-model-row" data-model="bert">
             <td>
               <span class="fw-semibold">
-                <% if m['name'] == @best&.dig('name') %><i class="bi bi-star-fill me-1" style="color:#f59e0b;"></i><% end %>
-                <%= m['name'] %>
+                <i class="bi bi-star-fill me-1" style="color:#f59e0b;"></i>
+                <span id="perf-m-name"><%= m['name'] %></span>
               </span>
             </td>
-            <td><span class="badge rounded-pill" style="background:rgba(255,255,255,0.06);color:var(--text-secondary);font-size:0.7rem;"><%= m['type'] %></span></td>
-            <td><strong style="color:<%= m['f1_score'].to_f >= 0.90 ? '#22c55e' : m['f1_score'].to_f >= 0.80 ? '#f59e0b' : '#ef4444' %>;"><%= m['f1_score'] %></strong></td>
-            <td><%= m['precision'] %></td>
-            <td><%= m['recall'] %></td>
-            <td><%= m['auc_roc'] %></td>
-            <td><%= m['accuracy'] %></td>
-            <td><span style="color:<%= m['false_positive_rate'].to_f < 0.05 ? '#22c55e' : '#f59e0b' %>;"><%= m['false_positive_rate'] %></span></td>
-            <td><%= m['detection_latency_ms'] %>ms</td>
+            <td><span class="badge rounded-pill" style="background:rgba(255,255,255,0.06);color:var(--text-secondary);font-size:0.7rem;"><span id="perf-m-type"><%= m['type'] %></span></span></td>
+            <td><strong id="perf-m-f1" style="color:<%= m['f1_score'].to_f >= 0.90 ? '#22c55e' : m['f1_score'].to_f >= 0.80 ? '#f59e0b' : '#ef4444' %>;"><%= ml_rate(m['f1_score'], precision: 3) %></strong></td>
+            <td id="perf-m-prec"><%= ml_rate(m['precision'], precision: 3) %></td>
+            <td id="perf-m-rec"><%= ml_rate(m['recall'], precision: 3) %></td>
+            <td id="perf-m-auc"><%= ml_rate(m['auc_roc'], precision: 3) %></td>
+            <td id="perf-m-acc"><%= ml_rate(m['accuracy'], precision: 3) %></td>
+            <td><span id="perf-m-fpr" style="color:<%= m['false_positive_rate'].to_f < 0.05 ? '#22c55e' : '#f59e0b' %>;"><%= ml_rate(m['false_positive_rate'], precision: 3) %></span></td>
+            <td><span id="perf-m-lat"><%= m['detection_latency_ms'] %></span>ms</td>
             <td>
               <% if m['is_active'] %>
                 <span class="badge rounded-pill" style="background:rgba(34,197,94,0.15);color:#86efac;font-size:0.7rem;">Active</span>
@@ -77,6 +94,18 @@
         <% end %>
       </tbody>
     </table>
+  </div>
+  <% head_metrics = @metrics || {} %>
+  <div class="px-2 pb-3 pt-0" style="font-size:0.76rem;color:var(--text-secondary);border-top:1px solid var(--border-color);">
+    <div class="mt-2"><strong style="color:var(--text-primary);">Holdout confusion (same eval as table)</strong>
+      <span class="ms-1" style="font-size:0.7rem;">— raw counts, not rates</span></div>
+    <div class="d-flex flex-wrap gap-3 mt-1" id="perf-confusion-row">
+      <span>TP: <strong style="color:var(--text-primary);" id="perf-cm-tp"><%= head_metrics["tp"].nil? ? "—" : head_metrics["tp"] %></strong></span>
+      <span>FP: <strong style="color:var(--text-primary);" id="perf-cm-fp"><%= head_metrics["fp"].nil? ? "—" : head_metrics["fp"] %></strong></span>
+      <span>TN: <strong style="color:var(--text-primary);" id="perf-cm-tn"><%= head_metrics["tn"].nil? ? "—" : head_metrics["tn"] %></strong></span>
+      <span>FN: <strong style="color:var(--text-primary);" id="perf-cm-fn"><%= head_metrics["fn"].nil? ? "—" : head_metrics["fn"] %></strong></span>
+      <span class="d-none d-md-inline text-secondary">(accuracy = (TP+TN) / n; n = TP+FP+TN+FN)</span>
+    </div>
   </div>
 </div>
 
@@ -140,38 +169,37 @@ const models = <%= raw @models.to_json %>;
 const ROC    = <%= raw @roc_data.to_json %>;
 const COLORS = ['#3b82f6','#22c55e','#f59e0b','#a855f7'];
 
-// Radar
-new Chart(document.getElementById('radarChart'), {
+const perfRadarChart = new Chart(document.getElementById('radarChart'), {
   type: 'radar',
   data: {
     labels: ['F1-Score','Precision','Recall','AUC-ROC','Accuracy'],
-    datasets: models.map((m, i) => ({
+    datasets: (models.length ? models : [{ name: 'BERT-Log', f1_score:0,precision:0,recall:0,auc_roc:0,accuracy:0 }]).map((m, i) => ({
       label: m.name,
       data: [m.f1_score, m.precision, m.recall, m.auc_roc, m.accuracy],
-      borderColor: COLORS[i], backgroundColor: COLORS[i] + '22',
-      pointBackgroundColor: COLORS[i], pointRadius: 3,
+      borderColor: COLORS[i % COLORS.length], backgroundColor: COLORS[i % COLORS.length] + '22',
+      pointBackgroundColor: COLORS[i % COLORS.length], pointRadius: 3,
     }))
   },
   options: {
     responsive: true,
-    scales: { r: { min: 0.6, max: 1.0, ticks: { color: '#475569', backdropColor: 'transparent', font: { size: 9 } },
+    scales: { r: { min: 0, max: 1, ticks: { color: '#475569', backdropColor: 'transparent', font: { size: 9 } },
                    grid: { color: 'rgba(255,255,255,0.08)' }, pointLabels: { color: '#94a3b8', font: { size: 10 } } } },
     plugins: { legend: { labels: { color: '#94a3b8', font: { size: 10 } } } }
   }
 });
 
-// ROC
-new Chart(document.getElementById('rocChart'), {
+const roc0 = (ROC && ROC[0]) ? ROC[0] : { fpr: [0,1], tpr: [0,1], name: 'BERT-Log', auc: 0.5 };
+const perfRocChart = new Chart(document.getElementById('rocChart'), {
   type: 'line',
   data: {
-    labels: ROC[0]?.fpr || [],
+    labels: roc0.fpr || [0,1],
     datasets: [
-      ...ROC.map((r, i) => ({
+      ...(ROC && ROC.length ? ROC.map((r, i) => ({
         label: `${r.name} (AUC=${r.auc})`,
-        data: r.tpr, borderColor: COLORS[i], backgroundColor: 'transparent',
+        data: r.tpr, borderColor: COLORS[i % COLORS.length], backgroundColor: 'transparent',
         tension: 0.3, pointRadius: 0, borderWidth: 2,
-      })),
-      { label: 'Random (AUC=0.5)', data: ROC[0]?.fpr.map(x => x), borderColor: '#334155',
+      })) : []),
+      { label: 'Random (AUC=0.5)', data: (roc0.fpr || [0,1]).map(x => x), borderColor: '#334155',
         backgroundColor: 'transparent', borderDash: [4,4], pointRadius: 0, borderWidth: 1 }
     ]
   },
@@ -186,4 +214,53 @@ new Chart(document.getElementById('rocChart'), {
     }
   }
 });
+
+function perfF1Color(f1) {
+  const v = parseFloat(f1) || 0;
+  if (v >= 0.9) return '#22c55e';
+  if (v >= 0.8) return '#f59e0b';
+  return '#ef4444';
+}
+
+(function performancePoll() {
+  async function tick() {
+    try {
+      const r = await fetch('/performance/snapshot', { headers: { 'Accept': 'application/json' } });
+      if (!r.ok) return;
+      const j = await r.json();
+      const m = (j.models && j.models[0]) ? j.models[0] : null;
+      if (!m) return;
+      const r3 = (x) => (x == null || x === '' ? '—' : Number(x).toFixed(3));
+      const set = (id, txt) => { const e = document.getElementById(id); if (e) e.textContent = txt; };
+      set('perf-m-f1', r3(m.f1_score));
+      const f1el = document.getElementById('perf-m-f1');
+      if (f1el) f1el.style.color = perfF1Color(m.f1_score);
+      set('perf-m-prec', r3(m.precision));
+      set('perf-m-rec', r3(m.recall));
+      set('perf-m-auc', r3(m.auc_roc));
+      set('perf-m-acc', r3(m.accuracy));
+      set('perf-m-fpr', r3(m.false_positive_rate));
+      set('perf-m-lat', m.detection_latency_ms);
+      set('perf-best-f1', r3(m.f1_score));
+      set('perf-best-prec', r3(m.precision));
+      set('perf-best-rec', r3(m.recall));
+      set('perf-best-auc', r3(m.auc_roc));
+      if (perfRadarChart && m) {
+        perfRadarChart.data.datasets[0].data = [m.f1_score, m.precision, m.recall, m.auc_roc, m.accuracy];
+        perfRadarChart.update('none');
+      }
+      const meta = j.metrics || {};
+      const cm = (k) => (meta[k] == null || meta[k] === '' ? '—' : String(meta[k]));
+      const noteEl = document.getElementById('perf-metric-note-text');
+      if (noteEl && meta.metric_note) noteEl.textContent = meta.metric_note;
+      const nEl = document.getElementById('perf-n-samples');
+      if (nEl && meta.n_eval_samples != null) nEl.textContent = String(meta.n_eval_samples);
+      set('perf-cm-tp', cm('tp'));
+      set('perf-cm-fp', cm('fp'));
+      set('perf-cm-tn', cm('tn'));
+      set('perf-cm-fn', cm('fn'));
+    } catch (e) {}
+  }
+  setInterval(tick, 20000);
+})();
 </script>
