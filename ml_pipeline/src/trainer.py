@@ -313,6 +313,18 @@ class AnomalyDetectionTrainer:
             logger.info(f"\n-- Training: {name} --")
             try:
                 model.fit(X_train, y_train)
+                if name == "Random Forest" and len(getattr(
+                        model.model, "classes_", [])) < 2:
+                    logger.warning(
+                        "Random Forest saw a single class in the resampled train "
+                        "set — refitting on train+val (SMOTE) for both labels."
+                    )
+                    X_c = np.vstack([X_train, X_val])
+                    y_c = np.concatenate([y_train, y_val])
+                    X_c2, y_c2 = self._apply_smote(X_c, y_c)
+                    if len(np.unique(y_c2)) >= 2:
+                        model = RandomForestModel(n_estimators=200)
+                        model.fit(X_c2, y_c2)
                 result = evaluator.evaluate(model, X_test, y_test, name)
                 results[name] = result
                 self._save_model(model, self._safe_fname(name))
@@ -356,7 +368,13 @@ class AnomalyDetectionTrainer:
             for name, model, fname in text_models:
                 logger.info("\n-- Training: %s --", name)
                 try:
-                    model.fit(X_text_train, y_text_train)
+                    if model.name == "BERT-Log" and X_text_val is not None and y_text_val is not None:
+                        model.fit(
+                            X_text_train, y_text_train,
+                            X_text_val=X_text_val, y_val=np.asarray(y_text_val),
+                        )
+                    else:
+                        model.fit(X_text_train, y_text_train)
                     result = evaluator.evaluate(model, X_text_test, y_text_test, model.name)
                     results[model.name] = result
                     self._save_model(model, fname)

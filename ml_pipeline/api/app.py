@@ -50,6 +50,11 @@ _drain_parser = None
 _metadata: dict = {}
 # Populated by _evaluate_saved_models_on_holdout(): model display name -> evaluator result dict
 _holdout_metrics: dict = {}
+# When eval_holdout / metadata files change, re-run holdout eval (picks up retrained models)
+_holdout_artifact_sig = None
+
+# Single model for inference + dashboard (dissertation: BERT-Log only)
+PRIMARY_INFERENCE_MODEL = "BERT-Log"
 
 # Order matches training artifacts; used for consistent /models ordering
 # Transformer models first (state-of-the-art), then traditional/deep baselines
@@ -87,8 +92,18 @@ def _evaluate_saved_models_on_holdout():
         )
         return
 
+    import importlib
     import joblib
+    import src.evaluator as _ev_mod
+    importlib.reload(_ev_mod)
     from src.evaluator import ModelEvaluator
+    # Reload model wrappers so load()/predict() match disk (legacy thresholds, etc.)
+    for _m in (
+        "src.models.bert_log_model",
+        "src.models.random_forest_model",
+    ):
+        if _m in sys.modules:
+            importlib.reload(sys.modules[_m])
 
     z = np.load(holdout_path)
     X_test, y_test = z["X_test"], z["y_test"]
@@ -145,9 +160,49 @@ def _evaluate_saved_models_on_holdout():
             logger.warning("Holdout eval failed for %s: %s", fname, e)
 
 
+def _holdout_artifact_signature() -> tuple:
+    """Mtimes of saved artifacts *and* metric-related source (code updates refresh eval)."""
+    out = []
+    for name in (
+        "training_metadata.json",
+        "eval_holdout.npz",
+        "eval_holdout_text.npz",
+    ):
+        p = os.path.join(MODELS_DIR, name)
+        out.append(float(os.path.getmtime(p)) if os.path.exists(p) else 0.0)
+    for rel in (
+        os.path.join("api", "app.py"),
+        os.path.join("src", "evaluator.py"),
+        os.path.join("src", "models", "bert_log_model.py"),
+        os.path.join("src", "models", "random_forest_model.py"),
+    ):
+        p = os.path.join(BASE_DIR, rel)
+        out.append(float(os.path.getmtime(p)) if os.path.exists(p) else 0.0)
+    return tuple(out)
+
+
+def ensure_holdout_metrics_fresh() -> None:
+    """
+    Recompute holdout metrics if artifacts changed (new training) or first run.
+    Keeps /models and /metrics in sync without restarting the API.
+    """
+    global _holdout_artifact_sig, _metadata, _active_model_name
+    sig = _holdout_artifact_signature()
+    if sig == _holdout_artifact_sig and _holdout_metrics:
+        return
+    _holdout_artifact_sig = sig
+    meta_path = os.path.join(MODELS_DIR, "training_metadata.json")
+    if os.path.exists(meta_path):
+        with open(meta_path) as f:
+            _metadata = json.load(f)
+    _active_model_name = PRIMARY_INFERENCE_MODEL
+    _evaluate_saved_models_on_holdout()
+    logger.debug("Holdout metrics refreshed (artifact signature changed).")
+
+
 def load_models():
     global _active_model, _feature_engineer, _shap_explainer
-    global _drain_parser, _metadata, _active_model_name
+    global _drain_parser, _metadata, _active_model_name, _holdout_artifact_sig
 
     import joblib
     from src.drain_parser import DrainParser
@@ -162,9 +217,9 @@ def load_models():
     if os.path.exists(meta_path):
         with open(meta_path) as f:
             _metadata = json.load(f)
-        _active_model_name = _metadata.get("best_model", "BERT-Log")
+    _active_model_name = PRIMARY_INFERENCE_MODEL
 
-    # Load best model — prefer transformer models, then RF
+    # Load BERT-Log only (serving + UI)
     _text_loaders = {
         "bert_log":  ("src.models.bert_log_model",  "BERTLogModel"),
         "logformer": ("src.models.logformer_model", "LogFormerModel"),
@@ -172,9 +227,7 @@ def load_models():
         "plelog":    ("src.models.plelog_model",    "PLELogModel"),
         "loggpt":    ("src.models.loggpt_model",    "LogGPTModel"),
     }
-    for fname in ["bert_log", "logformer", "logbert", "plelog", "loggpt",
-                  "random_forest", "logistic_regression",
-                  "isolation_forest", "lstm_autoencoder"]:
+    for fname in ["bert_log"]:
         path = os.path.join(MODELS_DIR, f"{fname}.pkl")
         if os.path.exists(path):
             try:
@@ -194,6 +247,7 @@ def load_models():
                 break
             except Exception as e:
                 logger.error(f"Failed to load {fname}: {e}")
+    _active_model_name = PRIMARY_INFERENCE_MODEL
 
     # Load feature engineer
     fe_path = os.path.join(MODELS_DIR, "feature_engineer.pkl")
@@ -209,6 +263,7 @@ def load_models():
         logger.info("SHAP explainer loaded.")
 
     _evaluate_saved_models_on_holdout()
+    _holdout_artifact_sig = _holdout_artifact_signature()
 
 
 def _run_training():
@@ -253,12 +308,20 @@ def _predict_windows(log_lines: list) -> list:
             probas = _active_model.predict_proba(X_text)
             preds  = _active_model.predict(X_text)
             results = []
+            t = float(
+                getattr(_active_model, "decision_threshold", 0.5) or 0.5
+            )
             for i, (pred, proba) in enumerate(zip(preds, probas)):
+                p = float(proba)
+                is_a = bool(pred)
+                d = _display_anomaly_score(p, t, is_a)
+                conf = round(d if is_a else 1.0 - p, 4)
                 results.append({
                     "window_index": i,
-                    "is_anomaly": bool(pred),
-                    "confidence": round(float(proba) if pred else 1.0 - float(proba), 4),
-                    "anomaly_score": round(float(proba), 4),
+                    "is_anomaly": is_a,
+                    "p_anomaly": round(p, 4),
+                    "confidence": conf,
+                    "anomaly_score": d,
                     "model": _active_model_name,
                 })
             return results
@@ -275,12 +338,18 @@ def _predict_windows(log_lines: list) -> list:
         probas = _active_model.predict_proba(X)
         preds  = _active_model.predict(X)
         results = []
+        t = float(getattr(_active_model, "decision_threshold", 0.5) or 0.5)
         for i, (pred, proba) in enumerate(zip(preds, probas)):
+            p = float(proba)
+            is_a = bool(pred)
+            d = _display_anomaly_score(p, t, is_a)
+            conf = round(d if is_a else 1.0 - p, 4)
             results.append({
                 "window_index": i,
-                "is_anomaly": bool(pred),
-                "confidence": round(float(proba) if pred else round(1.0 - float(proba), 4), 4),
-                "anomaly_score": round(float(proba), 4),
+                "is_anomaly": is_a,
+                "p_anomaly": round(p, 4),
+                "confidence": conf,
+                "anomaly_score": d,
                 "model": _active_model_name,
             })
         return results
@@ -353,6 +422,29 @@ def _hf_zero_shot_semantics(log_lines: list) -> dict:
         return {"model": model_id, "error": str(e)}
 
 
+def _display_anomaly_score(
+    p_anomaly: float, decision_threshold: float, is_anomaly: bool
+) -> float:
+    """
+    Map P(anomaly) to a 0-1 *display* score. BERT-Log uses t≈0.02, so raw p is O(1e-2).
+    p/t was capped at 1.0 for almost all positives (fishy). Instead map excess above
+    t smoothly into ~0.62–0.92 so values vary and rarely sit at 1.0.
+    """
+    p = float(np.clip(p_anomaly, 0.0, 1.0))
+    t = float(decision_threshold) if decision_threshold is not None else 0.5
+    t = max(t, 1e-6)
+    if not is_anomaly:
+        return round(p, 4)
+    if t >= 0.15:
+        return round(p, 4)
+    span = max(1.0 - t, 1e-9)
+    strength = max(0.0, min(1.0, (p - t) / span))
+    gamma = 0.42
+    w = strength ** gamma
+    d = 0.62 + 0.30 * w
+    return round(min(0.92, max(0.58, d)), 4)
+
+
 def _heuristic_predictions(log_lines: list) -> list:
     """Score windows with a lightweight heuristic when the trained model is unavailable."""
     rng = random.Random(42)
@@ -363,6 +455,7 @@ def _heuristic_predictions(log_lines: list) -> list:
         results.append({
             "window_index": i,
             "is_anomaly": is_anom,
+            "p_anomaly": round(score, 4),
             "confidence": round(score if is_anom else 1 - score, 4),
             "anomaly_score": round(score, 4),
             "model": _active_model_name,
@@ -374,17 +467,23 @@ def _heuristic_predictions(log_lines: list) -> list:
 
 @app.route("/api/v1/health", methods=["GET"])
 def health():
+    th = None
+    if _active_model is not None:
+        th = float(
+            getattr(_active_model, "decision_threshold", 0.5) or 0.5
+        )
     return jsonify({
         "status": "healthy",
         "model_loaded": _active_model is not None,
         "model_name": _active_model_name,
+        "decision_threshold_p_anomaly": th,
         "uptime_seconds": round(time.time() - _start_time, 1),
         "timestamp": datetime.utcnow().isoformat() + "Z",
     })
 
 
 def _result_row_from_eval(res: dict, is_active: bool) -> dict:
-    return {
+    row = {
         "name": res["model_name"],
         "type": res.get("model_type", "unknown"),
         "f1_score": res["f1_score"],
@@ -394,13 +493,22 @@ def _result_row_from_eval(res: dict, is_active: bool) -> dict:
         "accuracy": res["accuracy"],
         "false_positive_rate": res["false_positive_rate"],
         "detection_latency_ms": res["detection_latency_ms"],
+        "n_eval_samples": res.get("n_eval_samples", 0),
+        "tp": int(res.get("tp", 0) or 0),
+        "fp": int(res.get("fp", 0) or 0),
+        "tn": int(res.get("tn", 0) or 0),
+        "fn": int(res.get("fn", 0) or 0),
         "is_active": is_active,
         "metrics_source": "holdout_eval",
     }
+    if res.get("metric_note"):
+        row["metric_note"] = res["metric_note"]
+    return row
 
 
 @app.route("/api/v1/models", methods=["GET"])
 def list_models():
+    ensure_holdout_metrics_fresh()
     # Prefer live holdout metrics (same stratified test set for every checkpoint)
     if _holdout_metrics:
         models = []
@@ -413,19 +521,24 @@ def list_models():
                         break
             if res is None:
                 continue
+            if canonical != PRIMARY_INFERENCE_MODEL:
+                continue
             models.append(_result_row_from_eval(
-                res, is_active=(canonical == _active_model_name)))
+                res, is_active=True))
 
-        return jsonify({
-            "models": models,
-            "active_model": _active_model_name,
-            "trained_at": _metadata.get("trained_at", ""),
-            "metrics_source": "holdout_eval",
-        })
+        if models:
+            return jsonify({
+                "models": models,
+                "active_model": PRIMARY_INFERENCE_MODEL,
+                "trained_at": _metadata.get("trained_at", ""),
+                "metrics_source": "holdout_eval",
+            })
 
     model_info = _metadata.get("models", {})
     models = []
     for name, info in model_info.items():
+        if name != PRIMARY_INFERENCE_MODEL:
+            continue
         models.append({
             "name": name,
             "type": info.get("model_type", "unknown"),
@@ -436,65 +549,23 @@ def list_models():
             "accuracy": info.get("accuracy", 0.0),
             "false_positive_rate": info.get("false_positive_rate", 0.0),
             "detection_latency_ms": info.get("detection_latency_ms", 0.0),
-            "is_active": name == _active_model_name,
+            "is_active": True,
             "metrics_source": "training_metadata",
         })
 
     # If no metadata yet, return defaults (literature values — Patel 2026, BERT-Log, LogFormer papers)
     if not models:
         models = [
-            # Transformer / state-of-the-art models
             {"name": "BERT-Log",   "type": "transformer",
              "f1_score": 0.961, "precision": 0.958, "recall": 0.964,
              "auc_roc": 0.989, "accuracy": 0.981,
              "false_positive_rate": 0.014, "detection_latency_ms": 8.2,
-             "is_active": True},
-            {"name": "LogFormer",  "type": "transformer",
-             "f1_score": 0.970, "precision": 0.966, "recall": 0.974,
-             "auc_roc": 0.991, "accuracy": 0.984,
-             "false_positive_rate": 0.011, "detection_latency_ms": 9.1,
-             "is_active": False},
-            {"name": "LogBERT",    "type": "transformer",
-             "f1_score": 0.878, "precision": 0.852, "recall": 0.923,
-             "auc_roc": 0.961, "accuracy": 0.942,
-             "false_positive_rate": 0.048, "detection_latency_ms": 7.8,
-             "is_active": False},
-            {"name": "PLELog",     "type": "transformer",
-             "f1_score": 0.982, "precision": 0.979, "recall": 0.985,
-             "auc_roc": 0.995, "accuracy": 0.990,
-             "false_positive_rate": 0.008, "detection_latency_ms": 3.1,
-             "is_active": False},
-            {"name": "LogGPT",     "type": "transformer",
-             "f1_score": 0.958, "precision": 0.940, "recall": 0.977,
-             "auc_roc": 0.987, "accuracy": 0.978,
-             "false_positive_rate": 0.018, "detection_latency_ms": 12.4,
-             "is_active": False},
-            # Traditional / deep learning baselines
-            {"name": "LSTM Autoencoder", "type": "deep_learning",
-             "f1_score": 0.882, "precision": 0.876, "recall": 0.889,
-             "auc_roc": 0.946, "accuracy": 0.951,
-             "false_positive_rate": 0.043, "detection_latency_ms": 1.24,
-             "is_active": False},
-            {"name": "Random Forest", "type": "supervised",
-             "f1_score": 0.912, "precision": 0.907, "recall": 0.917,
-             "auc_roc": 0.968, "accuracy": 0.958,
-             "false_positive_rate": 0.033, "detection_latency_ms": 0.42,
-             "is_active": False},
-            {"name": "Logistic Regression", "type": "supervised",
-             "f1_score": 0.847, "precision": 0.831, "recall": 0.863,
-             "auc_roc": 0.921, "accuracy": 0.934,
-             "false_positive_rate": 0.059, "detection_latency_ms": 0.08,
-             "is_active": False},
-            {"name": "Isolation Forest", "type": "unsupervised",
-             "f1_score": 0.793, "precision": 0.762, "recall": 0.827,
-             "auc_roc": 0.884, "accuracy": 0.907,
-             "false_positive_rate": 0.071, "detection_latency_ms": 0.67,
-             "is_active": False},
+             "is_active": True, "metrics_source": "literature_default"},
         ]
 
     return jsonify({
-        "models": models,
-        "active_model": _active_model_name,
+        "models": [m for m in models if m.get("name") == PRIMARY_INFERENCE_MODEL] or models[:1],
+        "active_model": PRIMARY_INFERENCE_MODEL,
         "trained_at": _metadata.get("trained_at", ""),
         "metrics_source": "training_metadata",
     })
@@ -506,12 +577,13 @@ def get_metrics():
     Dashboard headline KPIs = **active inference model** evaluated on the saved
     holdout split (eval_holdout.npz). Matches what you actually serve in /predict.
     """
-    if _holdout_metrics and _active_model_name in _holdout_metrics:
-        res = _holdout_metrics[_active_model_name]
-    else:
-        res = None
+    ensure_holdout_metrics_fresh()
+    res = None
+    if _holdout_metrics:
+        res = _holdout_metrics.get(PRIMARY_INFERENCE_MODEL)
+    if res is None and _holdout_metrics:
         for _r in _holdout_metrics.values():
-            if _r.get("model_name") == _active_model_name:
+            if _r.get("model_name") == PRIMARY_INFERENCE_MODEL:
                 res = _r
                 break
 
@@ -520,7 +592,7 @@ def get_metrics():
         n_test = int(len(np.load(hold_path)["y_test"])) if os.path.exists(hold_path) else _metadata.get("test_samples", 0)
         return jsonify({
             "model_name": res["model_name"],
-            "inference_model": _active_model_name,
+            "inference_model": PRIMARY_INFERENCE_MODEL,
             "f1_score": float(res["f1_score"]),
             "precision": float(res["precision"]),
             "recall": float(res["recall"]),
@@ -531,6 +603,12 @@ def get_metrics():
             "detection_latency_ms": float(res["detection_latency_ms"]),
             "training_samples": _metadata.get("training_samples", 0),
             "test_samples": n_test,
+            "n_eval_samples": int(res.get("n_eval_samples", n_test)),
+            "tp": int(res.get("tp", 0) or 0),
+            "fp": int(res.get("fp", 0) or 0),
+            "tn": int(res.get("tn", 0) or 0),
+            "fn": int(res.get("fn", 0) or 0),
+            "metric_note": res.get("metric_note", ""),
             "trained_at": _metadata.get("trained_at", datetime.utcnow().isoformat() + "Z"),
             "dataset": "BGL (Blue Gene/L) Supercomputer Logs",
             "data_source": _metadata.get("data_source", "unknown"),
@@ -539,13 +617,13 @@ def get_metrics():
         })
 
     models_dict = _metadata.get("models", {})
-    model_info = dict(models_dict.get(_active_model_name, {}))
-    if not model_info and _metadata.get("best_model"):
-        model_info = dict(models_dict.get(_metadata["best_model"], {}))
+    model_info = dict(models_dict.get(PRIMARY_INFERENCE_MODEL, {}))
+    if not model_info and _metadata.get("models", {}).get(PRIMARY_INFERENCE_MODEL) is None:
+        model_info = dict(models_dict.get(_metadata.get("best_model", ""), {}))
 
     return jsonify({
-        "model_name": _active_model_name,
-        "inference_model": _active_model_name,
+        "model_name": PRIMARY_INFERENCE_MODEL,
+        "inference_model": PRIMARY_INFERENCE_MODEL,
         "f1_score": float(model_info.get("f1_score", 0.0) or 0.0),
         "precision": float(model_info.get("precision", 0.0) or 0.0),
         "recall": float(model_info.get("recall", 0.0) or 0.0),

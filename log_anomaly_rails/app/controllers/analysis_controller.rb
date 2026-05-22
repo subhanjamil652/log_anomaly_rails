@@ -1,4 +1,8 @@
 class AnalysisController < ApplicationController
+  # Large pastes cannot live in the session cookie (4KB limit). Store the result
+  # in Rails.cache and keep only a short key in the session.
+  ANALYSIS_CACHE_TTL = 2.hours
+
   def index
     @sample_logs = sample_bgl_lines
     @metrics = MlApiService.get_metrics
@@ -24,17 +28,18 @@ class AnalysisController < ApplicationController
     # Persist anomaly alerts
     preds.each do |pred|
       next unless pred["is_anomaly"]
-      score = pred["anomaly_score"].to_f
+      # Severity bands use raw P(anomaly) when the API provides it; display score is UI-scaled.
+      raw = (pred["p_anomaly"] || pred["anomaly_score"]).to_f
       AnomalyAlert.create!(
         log_sequence:      lines[0, 5].join("\n"),
         is_anomaly:        true,
         confidence_score:  pred["confidence"].to_f,
-        anomaly_score:     score,
+        anomaly_score:     pred["anomaly_score"].to_f,
         alert_model_name:  pred["model"] || "BERT-Log",
         feature_importances: (explain["feature_importances"] || []).to_json,
         detected_at:       Time.current,
         status:            "new",
-        severity:          score_to_severity(score),
+        severity:          score_to_severity(raw),
       )
     end
 
@@ -52,29 +57,48 @@ class AnalysisController < ApplicationController
       )
     end
 
-    # Session must use string keys — cookie store may not preserve symbol access consistently.
-    session[:last_analysis] = {
-      "lines" => lines.first(200),
-      "preds" => preds,
+    max_show = 2_000
+    show_n = [lines.length, preds.length, max_show].min
+    payload = {
+      "lines" => lines.first(show_n),
+      "preds" => preds.first(show_n),
       "summary" => summary,
       "explain" => explain
     }
+    cache_key = "analysis_result:#{SecureRandom.hex(20)}"
+    Rails.cache.write(cache_key, payload, expires_in: ANALYSIS_CACHE_TTL)
+    session[:last_analysis_key] = cache_key
+    session.delete(:last_analysis)
     redirect_to analysis_result_path("current"), status: :see_other
   end
 
   def show
-    data = session[:last_analysis] || {}
+    data = load_last_analysis_payload
     @lines   = data["lines"] || data[:lines] || []
     @preds   = data["preds"] || data[:preds] || []
     @summary = data["summary"] || data[:summary] || {}
     @explain = data["explain"] || data[:explain] || {}
     @n_anomaly = @preds.count { |p| p["is_anomaly"] }
     if @lines.empty?
-      redirect_to analysis_path, notice: "No analysis data. Please submit logs."
+      redirect_to analysis_path,
+        notice: "No analysis data. Please submit logs. (Results expire after #{ANALYSIS_CACHE_TTL.inspect}.)"
     end
   end
 
   private
+
+  def load_last_analysis_payload
+    key = session[:last_analysis_key].presence
+    if key
+      cached = Rails.cache.read(key)
+      return cached if cached.is_a?(Hash)
+    end
+    # Backward compatibility: old sessions stored a small hash in the cookie
+    legacy = session[:last_analysis]
+    return legacy if legacy.is_a?(Hash) && legacy["lines"].present?
+
+    {}
+  end
 
   def score_to_severity(score)
     case score

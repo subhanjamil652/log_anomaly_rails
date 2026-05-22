@@ -88,10 +88,12 @@ class MlApiService
     rng = Random.new(42)
     predictions = log_lines.each_with_index.map do |line, i|
       is_anom  = rng.rand < 0.08
+      # Raw P-like score (0.65–0.97 for anomalies) — matches API display scale in offline
       score    = is_anom ? rng.rand(0.65..0.97) : rng.rand(0.01..0.14)
       {
         "window_index" => i,
         "is_anomaly"   => is_anom,
+        "p_anomaly"    => score.round(4),
         "confidence"   => (is_anom ? score : 1 - score).round(4),
         "anomaly_score" => score.round(4),
         "model"        => "BERT-Log"

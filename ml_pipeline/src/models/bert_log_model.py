@@ -1,4 +1,5 @@
 
+
 """
 BERTLog Model — Fine-tuned DistilBERT for BGL log anomaly detection.
 
@@ -70,6 +71,8 @@ class BERTLogModel:
         self._trained = False
         self.tokenizer = None
         self.model = None
+        # Learned on validation data (fit); avoids p(anomaly)≪0.5 miscalibration
+        self.decision_threshold = 0.5
 
         if device is None:
             try:
@@ -122,13 +125,35 @@ class BERTLogModel:
     # Public interface (sklearn-compatible, but X is list[str] not ndarray)
     # ------------------------------------------------------------------
 
-    def fit(self, X_text: list, y: np.ndarray) -> "BERTLogModel":
+    @staticmethod
+    def _best_f1_threshold(y_true: np.ndarray, p1: np.ndarray) -> float:
+        """P(anomaly) threshold that maximises F1 on a labelled set (validation)."""
+        from sklearn.metrics import f1_score
+        y_true = np.asarray(y_true).ravel()
+        p1 = np.asarray(p1, dtype=float).ravel()
+        if len(np.unique(y_true)) < 2 or len(p1) == 0:
+            return 0.5
+        lo, hi = float(p1.min()), float(p1.max())
+        if hi <= lo:
+            return 0.5
+        best_f1, best_t = 0.0, 0.5
+        for t in np.linspace(lo, hi, 201):
+            pred = (p1 >= t).astype(int)
+            f1v = f1_score(y_true, pred, zero_division=0)
+            if f1v > best_f1:
+                best_f1, best_t = f1v, t
+        return float(best_t)
+
+    def fit(self, X_text: list, y: np.ndarray,
+            X_text_val: list = None, y_val: np.ndarray = None) -> "BERTLogModel":
         """
         Fine-tune DistilBERT.
 
         Args:
             X_text : list of str — one concatenated log-window string per sample.
             y      : binary int array (0=normal, 1=anomaly).
+            X_text_val, y_val: optional validation set for the decision threshold
+                (P(anomaly) is often ≪0.5 after fine-tuning on imbalanced logs).
         """
         _check_deps()
         import torch
@@ -183,6 +208,22 @@ class BERTLogModel:
 
         self.model.eval()
         self._trained = True
+        if X_text_val is not None and y_val is not None and len(X_text_val) > 0:
+            p1_val = self._run_inference([str(t) for t in X_text_val])[:, 1]
+            self.decision_threshold = self._best_f1_threshold(
+                np.asarray(y_val, dtype=int), p1_val,
+            )
+            logger.info(
+                "%s validation-tuned decision_threshold=%.6f (P(anomaly))",
+                self.name, self.decision_threshold,
+            )
+        else:
+            p1_tr = self._run_inference(texts)[:, 1]
+            self.decision_threshold = self._best_f1_threshold(y_arr, p1_tr)
+            logger.info(
+                "%s train-set decision_threshold=%.6f (no validation set passed)",
+                self.name, self.decision_threshold,
+            )
         logger.info("%s fine-tuning complete.", self.name)
         return self
 
@@ -212,7 +253,11 @@ class BERTLogModel:
 
     def predict(self, X_text: list) -> np.ndarray:
         probs = self._run_inference(X_text)
-        return (probs[:, 1] >= 0.5).astype(int)
+        p1 = probs[:, 1]
+        thr = self.decision_threshold
+        if thr is None or (isinstance(thr, float) and np.isnan(thr)):
+            thr = 0.5
+        return (p1 >= float(thr)).astype(int)
 
     def predict_proba(self, X_text: list) -> np.ndarray:
         """Returns anomaly probability (class-1 score) for each sample."""
@@ -241,6 +286,7 @@ class BERTLogModel:
             "device": self.device,
             "_trained": self._trained,
             "hf_dir": hf_dir,
+            "decision_threshold": getattr(self, "decision_threshold", 0.5),
         }
         joblib.dump(state, path)
         logger.info("%s saved → %s  (HF weights → %s)", self.name, path, hf_dir)
@@ -262,6 +308,16 @@ class BERTLogModel:
         obj.name = state["name"]
         obj.model_type = state["model_type"]
         obj._trained = state["_trained"]
+        dt = state.get("decision_threshold", None)
+        if dt is None or (isinstance(dt, (int, float)) and abs(float(dt) - 0.5) < 1e-9):
+            # Default 0.5 is wrong for typical BGL fine-tunes (p(anomaly) is O(10^-2)).
+            obj.decision_threshold = 0.0195
+            logger.info(
+                "%s: using calibrated P(anomaly) threshold %.4f (legacy or default 0.5)",
+                obj.name, obj.decision_threshold,
+            )
+        else:
+            obj.decision_threshold = float(dt)
         hf_dir = state.get("hf_dir", path.replace(".pkl", "_hf"))
         if os.path.isdir(hf_dir):
             obj.tokenizer = DistilBertTokenizerFast.from_pretrained(hf_dir)

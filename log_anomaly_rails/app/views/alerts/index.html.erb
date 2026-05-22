@@ -59,16 +59,18 @@
                 <%= alert.log_sequence&.truncate(100) || "Log sequence" %>
               </div>
             </div>
+            <% s_ui = anomaly_score_for_ui(alert.anomaly_score) %>
+            <% c_ui = anomaly_score_for_ui(alert.confidence_score) %>
             <div class="col-md-3">
               <div class="d-flex align-items-center gap-2 mb-1">
                 <span style="font-size:0.75rem;color:var(--text-secondary);">Anomaly Score</span>
-                <span style="font-size:0.85rem;font-weight:600;color:#ef4444;"><%= alert.anomaly_score.to_f.round(4) %></span>
+                <span style="font-size:0.85rem;font-weight:600;color:#ef4444;"><%= s_ui.round(3) %></span>
               </div>
               <div class="progress" style="height:5px;background:#334155;">
-                <div class="progress-bar" style="width:<%= (alert.anomaly_score.to_f*100).round %>%;background:<%= color_map[alert.severity] || '#22c55e' %>;"></div>
+                <div class="progress-bar" style="width:<%= (s_ui * 100).round.clamp(0, 100) %>%;background:<%= color_map[alert.severity] || '#22c55e' %>;"></div>
               </div>
               <div style="font-size:0.72rem;color:var(--text-secondary);margin-top:0.3rem;">
-                Confidence: <%= (alert.confidence_score.to_f * 100).round(1) %>%
+                Confidence: <%= (c_ui * 100).round(1) %>%
               </div>
             </div>
             <div class="col-md-2">

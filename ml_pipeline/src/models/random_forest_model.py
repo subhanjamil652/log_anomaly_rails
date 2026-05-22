@@ -41,7 +41,15 @@ class RandomForestModel:
         return self.model.predict(X)
 
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
-        return self.model.predict_proba(X)[:, 1]
+        """P(class=1); single-class fits return zeros (degenerate model)."""
+        pp = self.model.predict_proba(X)
+        if pp.shape[1] >= 2:
+            return pp[:, 1]
+        c0 = int(self.model.classes_[0]) if len(self.model.classes_) else 0
+        out = np.zeros(len(X), dtype=float)
+        if c0 == 0:
+            return out
+        return np.ones(len(X), dtype=float)
 
     @property
     def feature_importances_(self) -> np.ndarray:

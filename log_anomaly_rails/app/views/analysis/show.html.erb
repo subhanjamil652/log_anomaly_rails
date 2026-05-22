@@ -90,9 +90,10 @@
                 <td>
                   <div class="d-flex align-items-center gap-2">
                     <div class="progress" style="height:6px;background:#1e3a5f;width:80px;">
-                      <div class="progress-bar" style="width:<%= (pred['anomaly_score'].to_f*100).round %>%;background:<%= pred['is_anomaly'] ? '#ef4444' : '#22c55e' %>;"></div>
+                      <% p_ui = anomaly_score_for_ui(pred['anomaly_score']) %>
+                      <div class="progress-bar" style="width:<%= (p_ui * 100).round.clamp(0, 100) %>%;background:<%= pred['is_anomaly'] ? '#ef4444' : '#22c55e' %>;"></div>
                     </div>
-                    <small><%= pred['anomaly_score'].to_f.round(4) %></small>
+                    <small><%= p_ui.round(4) %><% if pred['p_anomaly'] %> <span class="text-secondary" style="font-size:0.65rem;">(Pₐ<%= pred['p_anomaly'] %>)</span><% end %></small>
                   </div>
                 </td>
                 <td><small style="color:var(--text-secondary);"><%= (pred['confidence'].to_f * 100).round(1) %>%</small></td>

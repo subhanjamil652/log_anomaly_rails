@@ -114,11 +114,12 @@
               <tr>
                 <td><span class="badge badge-<%= alert.severity || 'low' %> rounded-pill px-2 py-1"><%= (alert.severity || "low").capitalize %></span></td>
                 <td>
+                  <% s_d = anomaly_score_for_ui(alert.anomaly_score) %>
                   <div class="d-flex align-items-center gap-2">
                     <div class="progress" style="height:5px;background:#334155;width:50px;">
-                      <div class="progress-bar" style="width:<%= (alert.anomaly_score.to_f*100).round %>%;background:#ef4444;"></div>
+                      <div class="progress-bar" style="width:<%= (s_d * 100).round.clamp(0, 100) %>%;background:#ef4444;"></div>
                     </div>
-                    <small><%= alert.anomaly_score.to_f.round(3) %></small>
+                    <small><%= s_d.round(3) %></small>
                   </div>
                 </td>
                 <td><small style="color:var(--text-secondary);"><%= alert.alert_model_name || "BERT-Log" %></small></td>

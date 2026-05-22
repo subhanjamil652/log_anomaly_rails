@@ -51,9 +51,22 @@ class ModelEvaluator:
         except Exception:
             pass
 
-        prec = _as_float(precision_score(y_test, y_pred, zero_division=0))
-        rec = _as_float(recall_score(y_test, y_pred, zero_division=0))
-        f1 = _as_float(f1_score(y_test, y_pred, zero_division=0))
+        # Report **classification** metrics from `model.predict` only (same as /predict).
+        # Tuning the threshold *on this same holdout* to maximise F1 inflates F1/ACC
+        # toward 1.0 on small test sets and is not credible for a thesis.
+        # BERT-Log encodes a calibrated `decision_threshold` in the checkpoint; AUC
+        # still uses the continuous score (ranking), which is valid.
+        decision_t = float(getattr(model, "decision_threshold", 0.5) or 0.5)
+
+        prec = _as_float(precision_score(
+            y_test, y_pred, average="binary", pos_label=1, zero_division=0,
+        ))
+        rec = _as_float(recall_score(
+            y_test, y_pred, average="binary", pos_label=1, zero_division=0,
+        ))
+        f1 = _as_float(f1_score(
+            y_test, y_pred, average="binary", pos_label=1, zero_division=0,
+        ))
         acc = _as_float(accuracy_score(y_test, y_pred))
         if y_score is not None:
             try:
@@ -73,9 +86,12 @@ class ModelEvaluator:
             fpr_arr, tpr_arr, _ = roc_curve(y_test, y_score)
             roc_data = {"fpr": fpr_arr.tolist(), "tpr": tpr_arr.tolist()}
 
+        n_eval = int(len(y_test))
         result = {
             "model_name": name,
             "model_type": getattr(model, "model_type", "unknown"),
+            "decision_threshold": round(float(decision_t), 6),
+            "n_eval_samples": n_eval,
             "precision": round(prec, 4),
             "recall":    round(rec, 4),
             "f1_score":  round(f1, 4),
@@ -88,6 +104,19 @@ class ModelEvaluator:
             "tn": int(tn), "fn": int(fn),
             "roc_curve": roc_data,
         }
+        if n_eval < 200:
+            result["metric_note"] = (
+                f"Small holdout (n={n_eval} test windows). Scores of 1.000 on accuracy/F1 here "
+                f"only mean the model made no (or no harmful) errors on this slice — not proof of perfect "
+                f"real-world BGL coverage. Cite TP/FP/TN/FN (below) in your report; for stronger claims, "
+                f"increase the held-out n or add cross-validation. AUC-ROC is usually more stable than a single "
+                f"binary accuracy on tiny n."
+            )
+        elif acc >= 0.999 and n_eval < 2000:
+            result["metric_note"] = (
+                f"Very high accuracy ({acc:.3f}) on n={n_eval} — still a single split; report confusion counts "
+                "and, where possible, validate on a larger or temporal holdout."
+            )
         logger.info(
             f"  {name}: Precision={prec:.4f}  Recall={rec:.4f}  "
             f"F1={f1:.4f}  AUC-ROC={auc:.4f}  Latency={latency_ms:.3f}ms/sample"
